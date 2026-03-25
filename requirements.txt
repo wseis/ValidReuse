@@ -1,0 +1,6 @@
+numpy==2.4.3
+pandas==2.3.3
+streamlit==1.55.0
+altair==6.0.0
+scipy==1.17.1
+pymc==5.28.2

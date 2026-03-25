@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.DS_Store
+.git/
+.streamlit/secrets.toml
+validreuse/
+r_libs/
+report_figures/
+comparison_results_10x12.json
+edge_case_results.json
