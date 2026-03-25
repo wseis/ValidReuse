@@ -345,6 +345,7 @@ def build_validation_report_pdf(
         display_df = summary_df.copy()
         for column in ["Zielwert", "Lower Bound", "Median", "Obergrenze", "Mittelwert", "Standardabweichung"]:
             display_df[column] = display_df[column].map(lambda value: f"{value:.1f}" if column == "Zielwert" else f"{value:.4f}")
+        display_df["Parameter"] = display_df["Parameter"].map(lambda value: textwrap.fill(value, width=18))
         display_df["Methode"] = display_df["Methode"].map(lambda value: textwrap.fill(value, width=16))
 
         display_df = display_df[
@@ -359,9 +360,11 @@ def build_validation_report_pdf(
             ]
         ]
 
+        wrapped_col_labels = [textwrap.fill(str(label), width=16) for label in display_df.columns]
+
         table = summary_ax.table(
             cellText=display_df.values,
-            colLabels=display_df.columns,
+            colLabels=wrapped_col_labels,
             loc="upper left",
             cellLoc="center",
             bbox=[0.03, 0.05, 0.94, 0.57],
@@ -391,17 +394,24 @@ def build_validation_report_pdf(
             ].rename(columns={"Methode": "Method"})
             figure = build_histogram_chart(parameter_chart_df, parameter_summary_df, q)
             figure.set_size_inches(11.69, 8.27)
-            figure.subplots_adjust(top=0.70, bottom=0.31)
-            figure.suptitle(parameter_name, fontsize=19, fontweight="bold", y=0.98)
-            figure.axes[0].set_title(f"q{q}-Verteilung der Simulationswerte", fontsize=16, pad=28)
-            figure.axes[0].text(
-                0.0,
-                1.17,
+            figure.subplots_adjust(top=0.66, bottom=0.31)
+            figure.suptitle(parameter_name, fontsize=19, fontweight="bold", y=0.975)
+            figure.text(
+                0.125,
+                0.92,
+                f"q{q}-Verteilung der Simulationswerte",
+                fontsize=15,
+                fontweight="bold",
+                color="#132238",
+                va="top",
+            )
+            figure.text(
+                0.125,
+                0.885,
                 f"Zielwert: {parameter_result_df['Zielwert'].iloc[0]:.1f}   |   Methoden: {', '.join(parameter_result_df['Methode'].tolist())}",
-                transform=figure.axes[0].transAxes,
                 fontsize=11,
                 color="#475569",
-                va="bottom",
+                va="top",
             )
             mini_rows = [
                 f"{row['Methode']}: Lower Bound {row['Lower Bound']:.4f}, Median {row['Median']:.4f}, "

@@ -8,6 +8,7 @@ ENV/
 conda-env/
 __pycache__/
 r_libs/
+.pytensor_cache/
 report_figures/
 comparison_results_10x12.json
 edge_case_results.json

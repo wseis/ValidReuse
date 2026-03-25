@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import atexit
 import json
 import subprocess
 import sys
+import threading
 from pathlib import Path
 from typing import Iterable
 
@@ -13,26 +15,82 @@ WORKER_PATH = Path(__file__).with_name("pymc_worker.py")
 PYMC_AVAILABLE = sys.version_info < (3, 14) and WORKER_PATH.exists()
 
 
+class _PersistentWorker:
+    def __init__(self, mode: str) -> None:
+        self.mode = mode
+        self.process: subprocess.Popen[str] | None = None
+        self.lock = threading.Lock()
+
+    def _start(self) -> subprocess.Popen[str]:
+        if self.process is not None and self.process.poll() is None:
+            return self.process
+
+        self.process = subprocess.Popen(
+            [sys.executable, "-u", str(WORKER_PATH), self.mode, "--server"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            bufsize=1,
+        )
+        return self.process
+
+    def request(self, payload: dict[str, object]) -> dict[str, object]:
+        with self.lock:
+            for attempt in range(2):
+                process = self._start()
+                if process.stdin is None or process.stdout is None:
+                    raise RuntimeError("PyMC-Worker konnte nicht gestartet werden.")
+
+                try:
+                    process.stdin.write(json.dumps(payload) + "\n")
+                    process.stdin.flush()
+                    response_line = process.stdout.readline()
+                except Exception:
+                    response_line = ""
+
+                if response_line:
+                    return json.loads(response_line)
+
+                self.close()
+                if attempt == 1:
+                    raise RuntimeError("PyMC-Worker hat nicht geantwortet.")
+
+            raise RuntimeError("PyMC-Worker konnte nicht verwendet werden.")
+
+    def close(self) -> None:
+        process = self.process
+        self.process = None
+        if process is None:
+            return
+        try:
+            if process.stdin is not None:
+                process.stdin.close()
+        except Exception:
+            pass
+        try:
+            process.terminate()
+            process.wait(timeout=1)
+        except Exception:
+            try:
+                process.kill()
+            except Exception:
+                pass
+
+
+FAST_WORKER = _PersistentWorker("fast")
+STABLE_WORKER = _PersistentWorker("stable")
+atexit.register(FAST_WORKER.close)
+atexit.register(STABLE_WORKER.close)
+
+
 def _run_worker(payload: dict[str, object]) -> dict[str, object]:
     errors: list[str] = []
-    for mode in ("fast", "stable"):
-        completed = subprocess.run(
-            [sys.executable, str(WORKER_PATH), mode],
-            input=json.dumps(payload),
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-
-        if completed.returncode != 0:
-            stderr = completed.stderr.strip() or completed.stdout.strip() or "Unbekannter PyMC-Fehler."
-            errors.append(f"{mode}: {stderr}")
-            continue
-
+    for mode, worker in (("fast", FAST_WORKER), ("stable", STABLE_WORKER)):
         try:
-            result = json.loads(completed.stdout)
-        except json.JSONDecodeError:
-            errors.append(f"{mode}: keine gueltige Antwort")
+            result = worker.request(payload)
+        except Exception as exc:
+            errors.append(f"{mode}: {exc}")
             continue
 
         if "error" in result:
