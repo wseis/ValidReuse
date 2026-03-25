@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import io
 import sys
+import textwrap
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
 from matplotlib.backends.backend_pdf import PdfPages
@@ -13,7 +15,7 @@ import warnings
 
 from bayesian import bayesian_q10_lrv
 from bootstrap import bootstrap_q10_lrv
-from pymc_bayesian import PYMC_AVAILABLE, pymc_q10_lrv
+from pymc_bayesian import PYMC_AVAILABLE, pymc_q10_lrv, pymc_q10_lrv_batch
 
 
 METHOD_OPTIONS = {
@@ -194,6 +196,7 @@ def remove_example_data() -> None:
     st.session_state["input_seed_mode"] = "empty"
     clear_input_state()
     st.session_state.pop("analysis_results", None)
+    st.session_state.pop("report_pdf", None)
 
 
 def sync_input_tables_from_parameter_state() -> None:
@@ -260,6 +263,29 @@ def build_histogram_chart(chart_df: pd.DataFrame, summary_df: pd.DataFrame, q: i
     return fig
 
 
+def execute_analysis_task(task: dict[str, object]) -> tuple[str, str, dict[str, float | np.ndarray]]:
+    result = run_method(
+        method_key=task["method_key"],
+        vals_zu=task["vals_zu"],
+        vals_ab=task["vals_ab"],
+        q=task["q"],
+        alpha=task["alpha"],
+        n_sim=task["n_sim"],
+        seed_value=task["seed_value"],
+        B=task["B"],
+        add_one=task["add_one"],
+        posterior_draws=task["posterior_draws"],
+        warmup=task["warmup"],
+        chains=task["chains"],
+        pymc_draws=task["pymc_draws"],
+        pymc_warmup=task["pymc_warmup"],
+        pymc_chains=task["pymc_chains"],
+        add_one_bayes=task["add_one_bayes"],
+        add_one_pymc=task["add_one_pymc"],
+    )
+    return task["parameter_id"], task["label"], result
+
+
 def build_validation_report_pdf(
     summary_df: pd.DataFrame,
     distribution_df: pd.DataFrame,
@@ -311,14 +337,15 @@ def build_validation_report_pdf(
         box_widths = [0.18, 0.24, 0.24]
         for (label, value, color), x_pos, width in zip(metric_boxes, x_positions, box_widths):
             summary_ax.add_patch(
-                plt.Rectangle((x_pos, 0.67), width, 0.12, color=color, transform=summary_ax.transAxes, ec="none")
+                plt.Rectangle((x_pos, 0.69), width, 0.09, color=color, transform=summary_ax.transAxes, ec="none")
             )
-            summary_ax.text(x_pos + 0.015, 0.75, label, fontsize=10, color="#475569", va="center")
-            summary_ax.text(x_pos + 0.015, 0.705, value, fontsize=20, fontweight="bold", color="#132238", va="center")
+            summary_ax.text(x_pos + 0.015, 0.745, label, fontsize=9.5, color="#475569", va="center")
+            summary_ax.text(x_pos + 0.015, 0.708, value, fontsize=17, fontweight="bold", color="#132238", va="center")
 
         display_df = summary_df.copy()
         for column in ["Zielwert", "Lower Bound", "Median", "Obergrenze", "Mittelwert", "Standardabweichung"]:
             display_df[column] = display_df[column].map(lambda value: f"{value:.1f}" if column == "Zielwert" else f"{value:.4f}")
+        display_df["Methode"] = display_df["Methode"].map(lambda value: textwrap.fill(value, width=16))
 
         display_df = display_df[
             [
@@ -337,11 +364,11 @@ def build_validation_report_pdf(
             colLabels=display_df.columns,
             loc="upper left",
             cellLoc="center",
-            bbox=[0.03, 0.06, 0.94, 0.54],
+            bbox=[0.03, 0.05, 0.94, 0.57],
         )
         table.auto_set_font_size(False)
         table.set_fontsize(8.5)
-        table.scale(1, 1.45)
+        table.scale(1, 1.55)
         for (row, col), cell in table.get_celld().items():
             cell.set_edgecolor("#d7deed")
             if row == 0:
@@ -364,10 +391,12 @@ def build_validation_report_pdf(
             ].rename(columns={"Methode": "Method"})
             figure = build_histogram_chart(parameter_chart_df, parameter_summary_df, q)
             figure.set_size_inches(11.69, 8.27)
+            figure.subplots_adjust(top=0.70, bottom=0.31)
             figure.suptitle(parameter_name, fontsize=19, fontweight="bold", y=0.98)
+            figure.axes[0].set_title(f"q{q}-Verteilung der Simulationswerte", fontsize=16, pad=28)
             figure.axes[0].text(
                 0.0,
-                1.08,
+                1.17,
                 f"Zielwert: {parameter_result_df['Zielwert'].iloc[0]:.1f}   |   Methoden: {', '.join(parameter_result_df['Methode'].tolist())}",
                 transform=figure.axes[0].transAxes,
                 fontsize=11,
@@ -382,7 +411,7 @@ def build_validation_report_pdf(
             ]
             figure.axes[0].text(
                 0.0,
-                -0.26,
+                -0.30,
                 "\n".join(mini_rows),
                 transform=figure.axes[0].transAxes,
                 fontsize=10.5,
@@ -767,6 +796,81 @@ if run_analysis:
             with st.spinner("Validierungskennzahlen werden berechnet..."):
                 summary_rows: list[dict[str, object]] = []
                 distribution_rows: list[dict[str, object]] = []
+                pymc_results: dict[str, dict[str, float | np.ndarray]] = {}
+                pymc_errors: dict[str, str] = {}
+
+                if "pymc" in selected_methods:
+                    batch_payload = {
+                        parameter_id: {
+                            "vals_zu": parameter_inputs[parameter_id]["vals_zu"],
+                            "vals_ab": parameter_inputs[parameter_id]["vals_ab"],
+                            "draws": pymc_draws,
+                            "warmup": pymc_warmup,
+                            "chains": pymc_chains,
+                            "n_sim": n_sim,
+                            "q": q,
+                            "alpha": alpha,
+                            "add_one": add_one_pymc,
+                            "seed": int(seed_value) + index,
+                        }
+                        for index, parameter_id in enumerate(available_parameters)
+                    }
+                    try:
+                        batch_result = pymc_q10_lrv_batch(batch_payload)
+                        pymc_results = batch_result["results"]
+                        pymc_errors = batch_result["errors"]
+                    except Exception as exc:
+                        pymc_errors = {parameter_id: str(exc) for parameter_id in available_parameters}
+
+                task_specs: list[dict[str, object]] = []
+                task_counter = 0
+                for parameter in PARAMETERS:
+                    details = parameter_inputs[parameter["id"]]
+                    if parameter["id"] not in available_parameters:
+                        continue
+                    for label, method_key in METHOD_OPTIONS.items():
+                        if method_key not in selected_methods or method_key == "pymc":
+                            continue
+                        task_specs.append(
+                            {
+                                "parameter_id": parameter["id"],
+                                "label": label,
+                                "method_key": method_key,
+                                "vals_zu": details["vals_zu"],
+                                "vals_ab": details["vals_ab"],
+                                "q": q,
+                                "alpha": alpha,
+                                "n_sim": n_sim,
+                                "seed_value": int(seed_value) + task_counter,
+                                "B": B,
+                                "add_one": add_one,
+                                "posterior_draws": posterior_draws,
+                                "warmup": warmup,
+                                "chains": chains,
+                                "pymc_draws": pymc_draws,
+                                "pymc_warmup": pymc_warmup,
+                                "pymc_chains": pymc_chains,
+                                "add_one_bayes": add_one_bayes,
+                                "add_one_pymc": add_one_pymc,
+                            }
+                        )
+                        task_counter += 1
+
+                task_results: dict[tuple[str, str], dict[str, float | np.ndarray]] = {}
+                task_errors: list[str] = []
+                if task_specs:
+                    with ThreadPoolExecutor(max_workers=min(4, len(task_specs))) as executor:
+                        future_to_task = {executor.submit(execute_analysis_task, task): task for task in task_specs}
+                        for future in as_completed(future_to_task):
+                            task = future_to_task[future]
+                            try:
+                                parameter_id, label, result = future.result()
+                                task_results[(parameter_id, label)] = result
+                            except Exception as exc:
+                                task_errors.append(f"{task['label']} fuer {parameter_inputs[task['parameter_id']]['name']} konnte nicht berechnet werden: {exc}")
+
+                for error_message in task_errors:
+                    st.error(error_message)
 
                 for parameter in PARAMETERS:
                     details = parameter_inputs[parameter["id"]]
@@ -776,29 +880,17 @@ if run_analysis:
                         if method_key not in selected_methods:
                             continue
 
-                        try:
-                            result = run_method(
-                                method_key=method_key,
-                                vals_zu=details["vals_zu"],
-                                vals_ab=details["vals_ab"],
-                                q=q,
-                                alpha=alpha,
-                                n_sim=n_sim,
-                                seed_value=int(seed_value) + len(summary_rows),
-                                B=B,
-                                add_one=add_one,
-                                posterior_draws=posterior_draws,
-                                warmup=warmup,
-                                chains=chains,
-                                pymc_draws=pymc_draws,
-                                pymc_warmup=pymc_warmup,
-                                pymc_chains=pymc_chains,
-                                add_one_bayes=add_one_bayes,
-                                add_one_pymc=add_one_pymc,
-                            )
-                        except Exception as exc:
-                            st.error(f"{label} fuer {details['name']} konnte nicht berechnet werden: {exc}")
-                            continue
+                        if method_key == "pymc":
+                            if parameter["id"] in pymc_errors:
+                                st.error(f"{label} fuer {details['name']} konnte nicht berechnet werden: {pymc_errors[parameter['id']]}")
+                                continue
+                            result = pymc_results.get(parameter["id"])
+                            if result is None:
+                                continue
+                        else:
+                            result = task_results.get((parameter["id"], label))
+                            if result is None:
+                                continue
 
                         summary_rows.append(
                             {
@@ -834,6 +926,7 @@ if run_analysis:
                 "q": q,
                 "skipped_parameters": skipped_parameters,
             }
+            st.session_state.pop("report_pdf", None)
 
 if "analysis_results" in st.session_state:
     summary_df = st.session_state["analysis_results"]["summary_df"]
@@ -904,19 +997,25 @@ if "analysis_results" in st.session_state:
             "den jeweiligen Zielwert erreichen oder ueberschreiten. In der Tabelle oben ist dies fuer jede Methode "
             "und jeden Parameter direkt sichtbar."
         )
-        report_pdf = build_validation_report_pdf(
-            summary_df=summary_df,
-            distribution_df=distribution_df,
-            q=q,
-            selected_methods=st.session_state["analysis_results"]["selected_labels"],
-        )
-        st.download_button(
-            "Automatisiertes Reporting (PDF)",
-            data=report_pdf,
-            file_name="validreuse_validierungsreport.pdf",
-            mime="application/pdf",
-            use_container_width=True,
-        )
+        report_col1, report_col2 = st.columns([0.55, 0.45])
+        with report_col1:
+            if st.button("PDF-Report vorbereiten", use_container_width=True):
+                with st.spinner("PDF-Report wird erstellt..."):
+                    st.session_state["report_pdf"] = build_validation_report_pdf(
+                        summary_df=summary_df,
+                        distribution_df=distribution_df,
+                        q=q,
+                        selected_methods=st.session_state["analysis_results"]["selected_labels"],
+                    )
+        with report_col2:
+            if "report_pdf" in st.session_state:
+                st.download_button(
+                    "Automatisiertes Reporting (PDF)",
+                    data=st.session_state["report_pdf"],
+                    file_name="validreuse_validierungsreport.pdf",
+                    mime="application/pdf",
+                    use_container_width=True,
+                )
         st.markdown("</div>", unsafe_allow_html=True)
 elif not run_analysis:
     st.info("Geben Sie fuer einen oder mehrere Parameter Zu- und Ablaufwerte ein und starten Sie danach die Validierungsberechnung.")
