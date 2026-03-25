@@ -9,7 +9,7 @@ Streamlit app for comparing q10(LRV) evaluation methods on the same editable int
 ## Use the local Conda environment
 
 ```zsh
-conda activate /Users/wseis/Projects/ValidReuse/validreuse
+conda activate /Users/wseis/Projects/ValidReuse/validreuse313
 ```
 
 ## Install dependencies
@@ -17,6 +17,10 @@ conda activate /Users/wseis/Projects/ValidReuse/validreuse
 ```zsh
 pip install -r requirements.txt
 ```
+
+Recommended:
+- Use Python 3.13 for the full app, including PyMC.
+- The older `validreuse/` Python 3.14 environment is still present, but PyMC is not reliable there.
 
 ## Run the app
 
