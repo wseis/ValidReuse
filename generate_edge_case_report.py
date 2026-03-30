@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 
-ROOT = Path("/Users/wseis/Projects/ValidReuse")
+ROOT = Path(__file__).parent
 DATA_PATH = ROOT / "edge_case_results.json"
 REPORT_PATH = ROOT / "edge_case_report.md"
 FIG_DIR = ROOT / "report_figures"
@@ -242,19 +242,19 @@ Each scenario contains 5 synthetic datasets of sample size 12. Reported method s
 
 ### Mean Lower Bound by Scenario
 
-![Mean lower bound comparison](/Users/wseis/Projects/ValidReuse/report_figures/lower_bound_means.png)
+![Mean lower bound comparison](report_figures/lower_bound_means.png)
 
 ### Mean Median by Scenario
 
-![Mean median comparison](/Users/wseis/Projects/ValidReuse/report_figures/median_means.png)
+![Mean median comparison](report_figures/median_means.png)
 
 ### Lower-Bound Gap Heatmap
 
-![Lower-bound gap heatmap](/Users/wseis/Projects/ValidReuse/report_figures/lower_bound_gap_heatmap.png)
+![Lower-bound gap heatmap](report_figures/lower_bound_gap_heatmap.png)
 
 ### Median Gap Heatmap
 
-![Median gap heatmap](/Users/wseis/Projects/ValidReuse/report_figures/median_gap_heatmap.png)
+![Median gap heatmap](report_figures/median_gap_heatmap.png)
 """
 
     REPORT_PATH.write_text(report)

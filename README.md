@@ -9,7 +9,7 @@ Streamlit app for comparing q10(LRV) evaluation methods on the same editable int
 ## Use the local Conda environment
 
 ```zsh
-conda activate /Users/wseis/Projects/ValidReuse/validreuse313
+conda activate validreuse
 ```
 
 ## Install dependencies

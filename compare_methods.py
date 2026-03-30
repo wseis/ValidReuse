@@ -167,6 +167,6 @@ def run_comparison(
 
 if __name__ == "__main__":
     result = run_comparison()
-    output_path = Path("/Users/wseis/Projects/ValidReuse/comparison_results_10x12.json")
+    output_path = Path(__file__).parent / "comparison_results_10x12.json"
     output_path.write_text(json.dumps(result, indent=2))
     print(f"Wrote comparison results to {output_path}")

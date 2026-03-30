@@ -216,6 +216,6 @@ def run_edge_case_comparison(
 
 if __name__ == "__main__":
     result = run_edge_case_comparison()
-    output_path = Path("/Users/wseis/Projects/ValidReuse/edge_case_results.json")
+    output_path = Path(__file__).parent / "edge_case_results.json"
     output_path.write_text(json.dumps(result, indent=2))
     print(f"Wrote edge-case comparison results to {output_path}")
