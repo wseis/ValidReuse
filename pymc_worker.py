@@ -7,6 +7,9 @@ from pathlib import Path
 
 import numpy as np
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lrv import effluent_denominator, resolve_zero_handling
+
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
 os.environ.setdefault("XDG_CACHE_HOME", "/tmp")
 
@@ -101,6 +104,7 @@ def main() -> int:
         mu_draws = posterior["mu_out"].values.reshape(-1)
         alpha_draws = posterior["alpha_out"].values.reshape(-1)
 
+        mode = resolve_zero_handling(task_payload.get("zero_handling"), bool(task_payload.get("add_one", True)))
         rng = np.random.default_rng(task_payload["seed"])
         posterior_draw_count = min(len(meanlog_draws), len(sdlog_draws), len(mu_draws), len(alpha_draws))
         q10_samples = np.empty(posterior_draw_count)
@@ -109,10 +113,8 @@ def main() -> int:
             in_sim = rng.lognormal(mean=meanlog_draws[i], sigma=sdlog_draws[i], size=int(task_payload["n_sim"]))
             prob = alpha_draws[i] / (alpha_draws[i] + mu_draws[i])
             out_sim = rng.negative_binomial(alpha_draws[i], prob, size=int(task_payload["n_sim"])).astype(float)
-            if task_payload["add_one"]:
-                out_sim = out_sim + 1.0
 
-            lrv = np.log10(in_sim / out_sim)
+            lrv = np.log10(in_sim / effluent_denominator(out_sim, mode))
             q10_samples[i] = np.percentile(lrv, int(task_payload["q"]))
 
         return {

@@ -127,6 +127,7 @@ def pymc_q10_lrv(
     q: int = 10,
     alpha: float = 0.05,
     add_one: bool = True,
+    zero_handling: str | None = None,
     seed: int | None = None,
 ) -> dict[str, float | np.ndarray]:
     if not PYMC_AVAILABLE:
@@ -147,6 +148,7 @@ def pymc_q10_lrv(
                 "q": q,
                 "alpha": alpha,
                 "add_one": add_one,
+                "zero_handling": zero_handling,
                 "seed": seed,
             }
         }

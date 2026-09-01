@@ -5,6 +5,8 @@ from typing import Iterable
 
 import numpy as np
 
+from lrv import effluent_denominator, resolve_zero_handling
+
 
 def _sample_lognormal_posterior(vals_zu: np.ndarray, draws: int, rng: np.random.Generator) -> tuple[np.ndarray, np.ndarray]:
     log_vals = np.log(vals_zu)
@@ -103,9 +105,11 @@ def bayesian_q10_lrv(
     q: int = 10,
     alpha: float = 0.05,
     add_one: bool = True,
+    zero_handling: str | None = None,
     seed: int | None = None,
 ) -> dict[str, float | np.ndarray]:
     rng = np.random.default_rng(seed)
+    mode = resolve_zero_handling(zero_handling, add_one)
     vals_zu_arr = np.asarray(list(vals_zu), dtype=float)
     vals_ab_arr = np.asarray(list(vals_ab), dtype=float)
 
@@ -124,10 +128,8 @@ def bayesian_q10_lrv(
         in_sim = rng.lognormal(mean=meanlog_draws[i], sigma=sdlog_draws[i], size=n_sim)
         out_sim = rng.negative_binomial(size_draws[i], size_draws[i] / (size_draws[i] + mu_draws[i]), size=n_sim)
         out_sim = out_sim.astype(float)
-        if add_one:
-            out_sim = out_sim + 1.0
 
-        lrv = np.log10(in_sim / out_sim)
+        lrv = np.log10(in_sim / effluent_denominator(out_sim, mode))
         q10_samples[i] = np.percentile(lrv, q)
 
     return {

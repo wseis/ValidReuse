@@ -4,6 +4,8 @@ from typing import Iterable
 
 import numpy as np
 
+from lrv import effluent_denominator, resolve_zero_handling
+
 
 def bootstrap_q10_lrv(
     vals_zu: Iterable[int],
@@ -13,9 +15,11 @@ def bootstrap_q10_lrv(
     q: int = 10,
     alpha: float = 0.05,
     add_one: bool = True,
+    zero_handling: str | None = None,
     seed: int | None = None,
 ) -> dict[str, float | np.ndarray]:
     rng = np.random.default_rng(seed)
+    mode = resolve_zero_handling(zero_handling, add_one)
 
     vals_zu = np.asarray(list(vals_zu), dtype=float)
     vals_ab = np.asarray(list(vals_ab), dtype=float)
@@ -32,10 +36,7 @@ def bootstrap_q10_lrv(
         zu_sim = rng.choice(zu_b, size=n_sim, replace=True)
         ab_sim = rng.choice(ab_b, size=n_sim, replace=True)
 
-        if add_one:
-            ab_sim = ab_sim + 1.0
-
-        lrv = np.log10(zu_sim / ab_sim)
+        lrv = np.log10(zu_sim / effluent_denominator(ab_sim, mode))
         q10s[b] = np.percentile(lrv, q)
 
     return {

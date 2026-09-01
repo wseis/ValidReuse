@@ -15,8 +15,16 @@ import warnings
 
 from bayesian import bayesian_q10_lrv
 from bootstrap import bootstrap_q10_lrv
+from lrv import ADD_ONE, FLOOR_AT_ONE, NONE
 from pymc_bayesian import PYMC_AVAILABLE, pymc_q10_lrv, pymc_q10_lrv_batch
 
+
+ZERO_HANDLING_LABELS = {
+    "Nur Nullwerte auf 1 setzen (Leitfaden Gl. 5-2)": FLOOR_AT_ONE,
+    "1 zu allen Ablaufwerten addieren (bisheriges Verhalten)": ADD_ONE,
+    "Keine Anpassung": NONE,
+}
+ZERO_HANDLING_CHOICES = list(ZERO_HANDLING_LABELS)
 
 METHOD_OPTIONS = {
     "Empirischer Bootstrap": "bootstrap",
@@ -273,15 +281,15 @@ def execute_analysis_task(task: dict[str, object]) -> tuple[str, str, dict[str, 
         n_sim=task["n_sim"],
         seed_value=task["seed_value"],
         B=task["B"],
-        add_one=task["add_one"],
+        zero_handling=task["zero_handling"],
         posterior_draws=task["posterior_draws"],
         warmup=task["warmup"],
         chains=task["chains"],
         pymc_draws=task["pymc_draws"],
         pymc_warmup=task["pymc_warmup"],
         pymc_chains=task["pymc_chains"],
-        add_one_bayes=task["add_one_bayes"],
-        add_one_pymc=task["add_one_pymc"],
+        zero_handling_bayes=task["zero_handling_bayes"],
+        zero_handling_pymc=task["zero_handling_pymc"],
     )
     return task["parameter_id"], task["label"], result
 
@@ -444,15 +452,15 @@ def run_method(
     n_sim: int,
     seed_value: int,
     B: int,
-    add_one: bool,
+    zero_handling: str,
     posterior_draws: int,
     warmup: int,
     chains: int,
     pymc_draws: int,
     pymc_warmup: int,
     pymc_chains: int,
-    add_one_bayes: bool,
-    add_one_pymc: bool,
+    zero_handling_bayes: str,
+    zero_handling_pymc: str,
 ) -> dict[str, float | list[float]]:
     if method_key == "bootstrap":
         return bootstrap_q10_lrv(
@@ -462,7 +470,7 @@ def run_method(
             n_sim=n_sim,
             q=q,
             alpha=alpha,
-            add_one=add_one,
+            zero_handling=zero_handling,
             seed=seed_value,
         )
     if method_key == "bayesian":
@@ -475,7 +483,7 @@ def run_method(
             n_sim=n_sim,
             q=q,
             alpha=alpha,
-            add_one=add_one_bayes,
+            zero_handling=zero_handling_bayes,
             seed=seed_value,
         )
     return pymc_q10_lrv(
@@ -487,7 +495,7 @@ def run_method(
         n_sim=n_sim,
         q=q,
         alpha=alpha,
-        add_one=add_one_pymc,
+        zero_handling=zero_handling_pymc,
         seed=seed_value,
     )
 
@@ -671,14 +679,18 @@ with left_col:
     with boot_expander:
         with st.expander("Bootstrap", expanded=True):
             B = st.slider("Bootstrap-Stichproben (B)", min_value=250, max_value=5000, value=1000, step=250)
-            add_one = st.toggle("1 zu Ablaufwerten addieren", value=True, key="bootstrap_add_one")
+            zero_handling = ZERO_HANDLING_LABELS[
+                st.selectbox("Nullwerte im Ablauf", ZERO_HANDLING_CHOICES, index=0, key="bootstrap_zero_handling")
+            ]
 
     with bayes_expander:
         with st.expander("Approximation", expanded=True):
             posterior_draws = st.slider("Posterior-Ziehungen pro Kette", min_value=200, max_value=2000, value=600, step=100)
             warmup = st.slider("Warmup-Schritte pro Kette", min_value=100, max_value=1500, value=300, step=100)
             chains = st.slider("Ketten", min_value=1, max_value=4, value=2, step=1)
-            add_one_bayes = st.toggle("1 in Approximation addieren", value=True, key="approx_add_one")
+            zero_handling_bayes = ZERO_HANDLING_LABELS[
+                st.selectbox("Nullwerte im Ablauf", ZERO_HANDLING_CHOICES, index=0, key="approx_zero_handling")
+            ]
 
     with pymc_expander:
         with st.expander("PyMC", expanded=True):
@@ -686,12 +698,14 @@ with left_col:
                 pymc_draws = st.slider("PyMC-Ziehungen pro Kette", min_value=200, max_value=3000, value=600, step=100)
                 pymc_warmup = st.slider("PyMC-Warmup pro Kette", min_value=100, max_value=3000, value=300, step=100)
                 pymc_chains = st.slider("PyMC-Ketten", min_value=1, max_value=4, value=2, step=1)
-                add_one_pymc = st.toggle("1 in PyMC addieren", value=True, key="pymc_add_one")
+                zero_handling_pymc = ZERO_HANDLING_LABELS[
+                    st.selectbox("Nullwerte im Ablauf", ZERO_HANDLING_CHOICES, index=0, key="pymc_zero_handling")
+                ]
             else:
                 pymc_draws = 600
                 pymc_warmup = 300
                 pymc_chains = 2
-                add_one_pymc = True
+                zero_handling_pymc = FLOOR_AT_ONE
                 st.warning("PyMC ist unter Python 3.14 in dieser Umgebung derzeit nicht verfuegbar. Fuer diese Methode bitte Python 3.12 oder 3.13 verwenden.")
 
     run_analysis = st.button("Validierung berechnen", type="primary", use_container_width=True)
@@ -787,9 +801,9 @@ if run_analysis:
                 details["vals_zu"]
                 and details["vals_ab"]
                 and (
-                    ("bootstrap" in selected_methods and not add_one and any(value == 0 for value in details["vals_ab"]))
-                    or ("bayesian" in selected_methods and not add_one_bayes and any(value == 0 for value in details["vals_ab"]))
-                    or ("pymc" in selected_methods and not add_one_pymc and any(value == 0 for value in details["vals_ab"]))
+                    ("bootstrap" in selected_methods and zero_handling == NONE and any(value == 0 for value in details["vals_ab"]))
+                    or ("bayesian" in selected_methods and zero_handling_bayes == NONE and any(value == 0 for value in details["vals_ab"]))
+                    or ("pymc" in selected_methods and zero_handling_pymc == NONE and any(value == 0 for value in details["vals_ab"]))
                 )
             )
         ]
@@ -820,7 +834,8 @@ if run_analysis:
                             "n_sim": n_sim,
                             "q": q,
                             "alpha": alpha,
-                            "add_one": add_one_pymc,
+                            "add_one": True,
+                            "zero_handling": zero_handling_pymc,
                             "seed": int(seed_value) + index,
                         }
                         for index, parameter_id in enumerate(available_parameters)
@@ -853,15 +868,15 @@ if run_analysis:
                                 "n_sim": n_sim,
                                 "seed_value": int(seed_value) + task_counter,
                                 "B": B,
-                                "add_one": add_one,
+                                "zero_handling": zero_handling,
                                 "posterior_draws": posterior_draws,
                                 "warmup": warmup,
                                 "chains": chains,
                                 "pymc_draws": pymc_draws,
                                 "pymc_warmup": pymc_warmup,
                                 "pymc_chains": pymc_chains,
-                                "add_one_bayes": add_one_bayes,
-                                "add_one_pymc": add_one_pymc,
+                                "zero_handling_bayes": zero_handling_bayes,
+                                "zero_handling_pymc": zero_handling_pymc,
                             }
                         )
                         task_counter += 1
