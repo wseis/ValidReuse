@@ -10,6 +10,7 @@ import pandas as pd
 
 from bayesian import bayesian_q10_lrv
 from bootstrap import bootstrap_q10_lrv
+from lrv import FLOOR_AT_ONE
 from pymc_bayesian import pymc_q10_lrv
 
 logging.getLogger("pymc").setLevel(logging.ERROR)
@@ -84,7 +85,7 @@ SCENARIOS = {
 
 SCENARIO_DESCRIPTIONS = {
     "balanced_baseline": "Moderately spread positive vals_zu with ordinary count-like vals_ab and no special pathologies.",
-    "many_zero_ab": "vals_ab contains many zeros, stressing zero inflation and denominator floor effects after the +1 adjustment.",
+    "many_zero_ab": "vals_ab contains many zeros, stressing zero inflation and the Eq. (5-2) floor applied to zero effluent counts.",
     "wide_spread_zu": "vals_zu has very large multiplicative spread, creating heavy skew and occasional extreme inflow values.",
     "high_outlier_ab": "vals_ab is mostly ordinary counts but includes one very large outlier, testing robustness to extreme output observations.",
     "low_signal": "vals_zu is lower and tighter while vals_ab is relatively larger, producing weaker reduction and less separation.",
@@ -102,6 +103,7 @@ def run_edge_case_comparison(
     n_sim: int = 4000,
     q: int = 10,
     alpha: float = 0.05,
+    zero_handling: str = FLOOR_AT_ONE,
     seed: int = 321,
 ) -> dict[str, object]:
     rng = np.random.default_rng(seed)
@@ -131,7 +133,7 @@ def run_edge_case_comparison(
                         n_sim=n_sim,
                         q=q,
                         alpha=alpha,
-                        add_one=True,
+                        zero_handling=zero_handling,
                         seed=shared_seed,
                     ),
                 ),
@@ -146,7 +148,7 @@ def run_edge_case_comparison(
                         n_sim=n_sim,
                         q=q,
                         alpha=alpha,
-                        add_one=True,
+                        zero_handling=zero_handling,
                         seed=shared_seed,
                     ),
                 ),
@@ -161,7 +163,7 @@ def run_edge_case_comparison(
                         n_sim=n_sim,
                         q=q,
                         alpha=alpha,
-                        add_one=True,
+                        zero_handling=zero_handling,
                         seed=shared_seed,
                     ),
                 ),
@@ -205,6 +207,7 @@ def run_edge_case_comparison(
     )
 
     return {
+        "zero_handling": zero_handling,
         "scenario_descriptions": SCENARIO_DESCRIPTIONS,
         "datasets": datasets,
         "summary_rows": [asdict(row) for row in summaries],

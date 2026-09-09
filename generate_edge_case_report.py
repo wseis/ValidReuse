@@ -41,11 +41,12 @@ METHOD_COLORS = {
 }
 
 
-def load_frames() -> tuple[dict[str, str], pd.DataFrame]:
+def load_frames() -> tuple[dict[str, str], pd.DataFrame, str]:
     data = json.loads(DATA_PATH.read_text())
     descriptions = data["scenario_descriptions"]
     summary_df = pd.DataFrame(data["summary_rows"])
-    return descriptions, summary_df
+    zero_handling = data.get("zero_handling", "unknown")
+    return descriptions, summary_df, zero_handling
 
 
 def build_mean_table(summary_df: pd.DataFrame) -> pd.DataFrame:
@@ -151,7 +152,7 @@ def markdown_table(df: pd.DataFrame, rename_map: dict[str, str]) -> str:
 
 def build_report() -> None:
     FIG_DIR.mkdir(exist_ok=True)
-    descriptions, summary_df = load_frames()
+    descriptions, summary_df, zero_handling = load_frames()
 
     mean_table = build_mean_table(summary_df)
     lower_gap_table = build_gap_table(summary_df, "lower_bound")
@@ -195,6 +196,8 @@ This report summarizes the synthetic edge-case study comparing:
 - `Bayesian (PyMC)`
 
 Each scenario contains 5 synthetic datasets of sample size 12. Reported method statistics are scenario-level means across those 5 replicates.
+
+Effluent zero handling: `{zero_handling}` (see `lrv.py`). Eq. (5-2) of the FlexTreat Validierungsleitfaden corresponds to `floor_at_one`, which applies the floor of 1 to zero counts only.
 
 ## Scenario Guide
 
