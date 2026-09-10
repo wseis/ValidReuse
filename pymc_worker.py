@@ -67,6 +67,10 @@ def main() -> int:
         return model
 
     def run_single(task_payload: dict[str, object]) -> dict[str, object]:
+        if task_payload.get("analysis_kind") == "volume_counts":
+            from count_models import fit_count_model
+            return fit_count_model(task_payload)
+
         vals_zu_arr = np.asarray(task_payload["vals_zu"], dtype=float)
         vals_ab_arr = np.asarray(task_payload["vals_ab"], dtype=int)
 

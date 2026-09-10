@@ -501,6 +501,12 @@ def run_method(
 
 
 st.set_page_config(page_title="KA-Validierungsrechner", page_icon="📊", layout="wide")
+workflow = st.sidebar.radio("Arbeitsbereich", ["Counts und Probenvolumina", "Bisheriger Methodenvergleich"])
+if workflow == "Counts und Probenvolumina":
+    from volume_ui import render_volume_workflow
+    render_volume_workflow(PARAMETERS)
+    st.stop()
+st.warning("Bisheriger Methodenvergleich: nur fuer Werte auf derselben Volumenbasis. Fuer variable Volumina den neuen Arbeitsbereich verwenden.")
 
 st.markdown(
     """
