@@ -501,10 +501,21 @@ def run_method(
 
 
 st.set_page_config(page_title="KA-Validierungsrechner", page_icon="📊", layout="wide")
-workflow = st.sidebar.radio("Arbeitsbereich", ["Counts und Probenvolumina", "Bisheriger Methodenvergleich"])
+workflow = st.sidebar.radio(
+    "Arbeitsbereich",
+    ["Counts und Probenvolumina", "QM-Bewertungen", "Bisheriger Methodenvergleich", "Dokumentation und Formeln"],
+)
+if workflow == "QM-Bewertungen":
+    from qm_ui import render_qm_workflow
+    render_qm_workflow(PARAMETERS)
+    st.stop()
 if workflow == "Counts und Probenvolumina":
     from volume_ui import render_volume_workflow
     render_volume_workflow(PARAMETERS)
+    st.stop()
+if workflow == "Dokumentation und Formeln":
+    from docs_ui import render_documentation
+    render_documentation(PARAMETERS)
     st.stop()
 st.warning("Bisheriger Methodenvergleich: nur fuer Werte auf derselben Volumenbasis. Fuer variable Volumina den neuen Arbeitsbereich verwenden.")
 

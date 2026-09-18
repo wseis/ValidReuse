@@ -14,6 +14,7 @@ import streamlit as st
 from sample_data import (COLUMNS, RESULT_TYPES, VOLUME_METHODS, empty_table, example_tables,
                          validate_table, model_arrays, editor_table, guideline_lrv_pairs)
 from pymc_bayesian import PYMC_AVAILABLE, pymc_q10_lrv_batch
+from ui_theme import hero, inject_css, section_head
 
 FAMILIES = {"Poisson-Lognormal": "poisson_lognormal", "Negativbinomial (Poisson-Gamma)": "negative_binomial"}
 TEMPLATE_PATH = Path(__file__).with_name("assets") / "ValidReuse_Datenvorlage.xlsx"
@@ -46,6 +47,57 @@ FIELD_HELP = {
 }
 
 
+STEP_TITLES = ["Daten eingeben", "Eingaben prüfen", "Messbegrenzte LRV", "Modellbasierte Auswertung"]
+
+def _stepper(states):
+    """Progress rail across the four steps; states are done, current or locked."""
+    parts = []
+    for number, (title, state) in enumerate(zip(STEP_TITLES, states), start=1):
+        dot = {"done": "✓", "locked": "🔒"}.get(state, str(number))
+        parts.append(f'<div class="vr-step {state}"><span class="vr-dot">{dot}</span>{title}</div>')
+        if number < len(STEP_TITLES):
+            parts.append('<div class="vr-step-sep"></div>')
+    st.markdown(f'<div class="vr-stepper">{"".join(parts)}</div>', unsafe_allow_html=True)
+
+
+def _volume_span(volumes):
+    """One value when every analysis shares an exposure, otherwise the range."""
+    low, high = float(volumes.min()), float(volumes.max())
+    return f"{low:g}" if low == high else f"{low:g}–{high:g}"
+
+
+def _sidebar_panel(indicator, pid, inflow, outflow, guideline, errors):
+    """At-a-glance state plus the percentile that steps 3 and 4 share."""
+    rows = [("Indikator", indicator), ("Zulaufproben", str(len(inflow)))]
+    if outflow.empty:
+        rows.append(("Ablaufproben", "0"))
+    else:
+        rows += [
+            ("Ablaufproben", str(int(outflow.sample_id.nunique()))),
+            ("Analysen", str(len(outflow))),
+            ("Nullzählungen", str(int((outflow.value == 0).sum()))),
+            ("Effektiv je Analyse", f"{_volume_span(outflow.effective_volume_ml)} mL"),
+        ]
+    rows.append(("Gepaarte LRV", str(len(guideline))))
+
+    if errors:
+        state = '<span class="vr-bad">Fehler</span>'
+    elif inflow.empty and outflow.empty:
+        state = '<span class="vr-idle">keine Daten</span>'
+    else:
+        state = '<span class="vr-ok">formal plausibel</span>'
+    rows.append(("Eingabeprüfung", state))
+
+    body = "".join(f'<div class="vr-row"><span>{label}</span><b>{value}</b></div>' for label, value in rows)
+    with st.sidebar:
+        st.markdown("#### Datenstatus")
+        st.markdown(f'<div class="vr-side">{body}</div>', unsafe_allow_html=True)
+        st.markdown("#### Auswertung")
+        return st.slider("Populationsperzentil (%)", 1, 50, 10, key=f"quantile_{pid}",
+                         help="10 bedeutet q10: Der Wert, den 10 % der betrachteten Population unterschreiten. "
+                              "Gilt für die Leitfaden-LRV und für die modellbasierte Auswertung.")
+
+
 def _read_excel_template(content):
     """Read the two data sheets from the documented ValidReuse workbook."""
     sheets = pd.read_excel(io.BytesIO(content), sheet_name=None, header=2, dtype={
@@ -67,9 +119,9 @@ def _read_excel_template(content):
 
 def _excel_controls(parameter_id):
     """Offer the self-documenting workbook and import both sheets together."""
-    st.markdown("#### Excel-Vorlage: herunterladen, ausfüllen, wieder importieren")
-    st.write("Die Vorlage enthält ein eigenes Blatt **Anleitung**, erklärte Beispielzeilen und getrennte Blätter für Zu- und Ablauf. Die englischen Spaltennamen dienen dem sicheren Import und dürfen nicht geändert werden.")
-    left, right = st.columns(2)
+    st.markdown("**Excel-Vorlage: herunterladen, ausfüllen, wieder importieren**")
+    st.caption("Die Vorlage enthält ein eigenes Blatt **Anleitung**, erklärte Beispielzeilen und getrennte Blätter für Zu- und Ablauf. Die englischen Spaltennamen dienen dem sicheren Import und dürfen nicht geändert werden.")
+    left, right = st.columns(2, vertical_alignment="center")
     if TEMPLATE_PATH.exists():
         left.download_button(
             "Excel-Vorlage herunterladen",
@@ -77,6 +129,7 @@ def _excel_controls(parameter_id):
             file_name="ValidReuse_Datenvorlage.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             key=f"xlsx_download_{parameter_id}",
+            width="stretch",
             help="Arbeitsmappe mit Anleitung, Spaltenlexikon und Beispielen für beide Probenahmestellen.",
         )
     upload = right.file_uploader(
@@ -120,8 +173,10 @@ def _editor(side, parameter_id):
                     "dilution_factor", "recovery", "effective_ml", "recovery_source", "result_type", "unit", "pair_id", "notes"])
         st.dataframe(pd.DataFrame({"Spalte": [LABELS[x] for x in visible], "Bedeutung": [FIELD_HELP[x] for x in visible]}),
                      hide_index=True, width="stretch")
-    upload = st.file_uploader("Optional: dieses Tabellenblatt als CSV importieren", type="csv", key=f"upload_{parameter_id}_{side}",
-                              help="Für den gemeinsamen Import von Zu- und Ablauf verwenden Sie oben die Excel-Vorlage.")
+    with st.expander("Nur dieses Tabellenblatt als CSV importieren"):
+        upload = st.file_uploader("Optional: dieses Tabellenblatt als CSV importieren", type="csv", key=f"upload_{parameter_id}_{side}",
+                                  label_visibility="collapsed",
+                                  help="Für den gemeinsamen Import von Zu- und Ablauf verwenden Sie oben die Excel-Vorlage.")
     if upload is not None and st.button("CSV übernehmen", key=f"import_{parameter_id}_{side}"):
         try:
             table = pd.read_csv(io.BytesIO(upload.getvalue()), dtype={k:str for k in ["sample_id","replicate_id","pair_id","date"]})
@@ -163,21 +218,30 @@ def _fingerprint(in_table, out_table, settings):
 
 
 def render_volume_workflow(parameters):
-    st.title("ValidReuse · Counts und Probenvolumina")
-    st.write("Hier werten Sie Rohzählungen im Ablauf zusammen mit dem tatsächlich untersuchten Volumen jeder Probe aus. Das berücksichtigt, dass bei großen und wechselnden Probenvolumina derselbe Count unterschiedliche Konzentrationen bedeutet.")
-    st.markdown("### 1. Indikator wählen und Daten eingeben")
-    selected_indicator = st.selectbox("Indikator", [p["name"] for p in parameters],
-                                      help="Für jeden Indikator werden Eingaben und Ergebnisse getrennt gespeichert.")
-    parameter = next(p for p in parameters if p["name"] == selected_indicator)
-    pid = parameter["id"]
-    _excel_controls(pid)
-    c1,c2 = st.columns(2)
-    c1.button("Beispieldaten in der Oberfläche laden", on_click=_reset, args=(pid,True),
-              help="Ersetzt die aktuellen Eingaben durch ein vollständiges Beispiel.")
-    c2.button("Eingaben leeren", on_click=_reset, args=(pid,False),
-              help="Entfernt die aktuellen Tabellenwerte für diesen Indikator.")
-    with st.expander("Welche Eingabeart passt zu meiner Ablaufprobe?", expanded=True):
-        st.markdown("""**Zulauf:** positive Konzentrationen; Dezimalwerte sind erlaubt. **Ablauf:** ganze CFU/PFU-Rohzählungen, einschließlich 0.
+    inject_css()
+    hero("ValidReuse · Counts und Probenvolumina",
+         "Hier werten Sie Rohzählungen im Ablauf zusammen mit dem tatsächlich untersuchten Volumen "
+         "jeder Probe aus. Das berücksichtigt, dass bei großen und wechselnden Probenvolumina derselbe "
+         "Count unterschiedliche Konzentrationen bedeutet.")
+
+    # Filled in once the editors below have been validated.
+    stepper_slot = st.empty()
+
+    with st.container(border=True, key="vr_step1"):
+        section_head(1, "Indikator wählen und Daten eingeben")
+        # The indicator picker must stay the first selectbox in render order.
+        selected_indicator = st.selectbox("Indikator", [p["name"] for p in parameters],
+                                          help="Für jeden Indikator werden Eingaben und Ergebnisse getrennt gespeichert.")
+        parameter = next(p for p in parameters if p["name"] == selected_indicator)
+        pid = parameter["id"]
+        _excel_controls(pid)
+        c1,c2 = st.columns(2)
+        c1.button("Beispieldaten in der Oberfläche laden", on_click=_reset, args=(pid,True), width="stretch",
+                  help="Ersetzt die aktuellen Eingaben durch ein vollständiges Beispiel.")
+        c2.button("Eingaben leeren", on_click=_reset, args=(pid,False), width="stretch",
+                  help="Entfernt die aktuellen Tabellenwerte für diesen Indikator.")
+        with st.expander("Welche Eingabeart passt zu meiner Ablaufprobe?"):
+            st.markdown("""**Zulauf:** positive Konzentrationen; Dezimalwerte sind erlaubt. **Ablauf:** ganze CFU/PFU-Rohzählungen, einschließlich 0.
 
 - **concentrated – Probe angereichert:** Verwenden, wenn Wasser filtriert oder anderweitig angereichert und nur ein Teil des Eluats analysiert wurde.
 - **direct – direktes Aliquot:** Verwenden, wenn ein Wasseraliquot ohne vorherige Anreicherung direkt analysiert wurde.
@@ -188,11 +252,13 @@ Alle Volumina in **mL**. Verdünnungsfaktor 10 bedeutet 1:10; ohne Verdünnung 1
 15 000 mL filtriert, 400 mL Eluat, 100 mL analysiert und 50 % Wiederfindung ergeben **1 875 mL effektives Volumen**. Drei Counts entsprechen dann **0,16 /100 mL**.
 
 **Technische Replikate:** gleiche Proben-ID, unterschiedliche Replikat-ID und getrennte analysierte Aliquots. Sie teilen im Modell eine Konzentration. Fehlende Ergebnisse als `missing` dokumentieren; `<LOD`, `<LOQ`, MPN und Konzentrationen im Ablauf werden gespeichert, aber für diese Count-Auswertung nicht automatisch umgerechnet.""")
-    t1,t2 = st.tabs(["Zulaufkonzentrationen", "Ablauf: Counts und Volumina"])
-    with t1:
-        raw_in = _editor("in",pid)
-    with t2:
-        raw_out = _editor("out",pid)
+        t1,t2 = st.tabs(["Zulaufkonzentrationen", "Ablauf: Counts und Volumina"])
+        with t1:
+            raw_in = _editor("in",pid)
+        with t2:
+            raw_out = _editor("out",pid)
+
+    # Validate once, up front: every later step is gated on the outcome.
     errors = []
     try:
         inflow = validate_table(raw_in,"in")
@@ -204,73 +270,124 @@ Alle Volumina in **mL**. Verdünnungsfaktor 10 bedeutet 1:10; ohne Verdünnung 1
     except ValueError as exc:
         outflow = pd.DataFrame()
         errors.append(f"Ablauf: {exc}")
-    for error in errors:
-        st.error(error)
-    st.markdown("### 2. Eingaben und effektive Volumina prüfen")
-    q = st.slider("Populationsperzentil (%)", 1, 50, 10, key=f"quantile_{pid}",
-                  help="10 bedeutet q10: Der Wert, den 10 % der betrachteten Population unterschreiten.")
-    if not outflow.empty:
-        st.subheader("Berechnete Ablaufkonzentrationen")
-        preview = outflow[["sample_id","replicate_id","value","effective_volume_ml","concentration_100ml","zero_convention_100ml"]].rename(columns={
-            "sample_id":"Probe", "replicate_id":"Replikat", "value":"Count", "effective_volume_ml":"Effektiv (mL)",
-            "concentration_100ml":"Count / effektives Volumen (je 100 mL)", "zero_convention_100ml":"Gl. 5-2 Nenner (je 100 mL)"})
-        st.dataframe(preview, hide_index=True, width="stretch")
-        st.caption("Kontrollieren Sie besonders das effektive Volumen. Der Nenner nach Gleichung 5-2 setzt nur für die Leitfadenrechnung einen Count von 0 auf 1. Im statistischen Modell bleibt eine Null eine beobachtete Null.")
-        st.write(f"{outflow.sample_id.nunique()} unabhängige Ablaufproben · {len(outflow)} Analysen · {int((outflow.value == 0).sum())} Nullzählungen · {outflow.effective_volume_ml.min():g}–{outflow.effective_volume_ml.max():g} mL je Analyse")
-    st.markdown("### 3. Messbegrenzte LRV nach Leitfaden")
-    st.write("Diese Ausgabe verwendet zusammengehörige Zu- und Ablaufproben. Tragen Sie dafür bei beiden Proben dieselbe Paar-ID ein.")
+    pairing_error = None
     try:
         guideline = guideline_lrv_pairs(inflow, outflow)
     except ValueError as exc:
         guideline = pd.DataFrame()
-        st.error(f"Paarung: {exc}")
-    if guideline.empty:
-        st.info("Noch keine vollständigen Paare: Bei der zugehörigen Zu- und Ablaufprobe dieselbe Paar-ID eintragen. Die Position einer Zeile wird nicht als Paarung verwendet.")
-    else:
-        shown = guideline.rename(columns={
-            "pair_id":"Paar-ID", "inflow_sample_id":"Zulaufprobe", "outflow_sample_id":"Ablaufprobe",
-            "count":"Gesamt-Count", "effective_volume_ml":"Effektiv gesamt (mL)",
-            "inflow_concentration_100ml":"Zulauf (/100 mL)",
-            "effluent_denominator_100ml":"Ablaufnenner Gl. 5-2 (/100 mL)",
-            "guideline_lrv":"Messbegrenzte LRV",
-        })
-        st.dataframe(shown, hide_index=True, width="stretch",
-                     column_config={"Messbegrenzte LRV": st.column_config.NumberColumn(format="%.2f")})
-        descriptive_q = float(np.quantile(guideline.guideline_lrv, q / 100.))
-        st.write(f"Deskriptives q{q} der {len(guideline)} gepaarten Leitfaden-LRV: **{descriptive_q:.2f} log**")
-        st.caption("Technische Ablaufreplikate werden je Umweltprobe aus Counts und getrennten effektiven Volumina zusammengefasst. Die Ausgabe ist messbegrenzt und enthält kein Unsicherheitsintervall.")
-        st.download_button("Gepaarte Leitfaden-LRV als CSV herunterladen",
-                           guideline.to_csv(index=False).encode("utf-8"),
-                           file_name=f"validreuse_{pid}_leitfaden_lrv.csv", mime="text/csv")
-    st.markdown("### 4. Modellbasierte Auswertung")
-    st.write("Die Modelle schätzen Konzentrationen aus Counts und individuellen Volumina. So werden Zählunsicherheit und Unterschiede zwischen Umweltproben getrennt berücksichtigt.")
+        pairing_error = str(exc)
+    for error in errors:
+        st.error(error)
+
+    out_samples = 0 if outflow.empty else int(outflow.sample_id.nunique())
+    inputs_clean = not errors and not inflow.empty and not outflow.empty
+    # The model needs at least two independent samples on each side (model_arrays).
+    model_ready = inputs_clean and len(inflow) >= 2 and out_samples >= 2
+    result_key = f"vol_result_{pid}"
+    has_result = bool(st.session_state.get(result_key))
+
+    with stepper_slot:
+        _stepper([
+            "done" if inputs_clean else "current",
+            "done" if not outflow.empty else ("current" if inputs_clean else "locked"),
+            "done" if not guideline.empty else ("current" if inputs_clean else "locked"),
+            "done" if has_result else ("current" if model_ready else "locked"),
+        ])
+    q = _sidebar_panel(selected_indicator, pid, inflow, outflow, guideline, errors)
+
+    with st.container(border=True, key="vr_step2"):
+        section_head(2, "Eingaben und effektive Volumina prüfen", locked=outflow.empty)
+        if outflow.empty:
+            st.caption("Sobald eine gültige Ablaufzeile mit Count und Volumenangabe vorliegt, erscheinen hier die berechneten effektiven Volumina.")
+        else:
+            tiles = st.columns(4)
+            tiles[0].metric("Ablaufproben", out_samples, border=True,
+                            help="Unabhängige Umweltproben; technische Replikate zählen nicht doppelt.")
+            tiles[1].metric("Analysen", len(outflow), border=True)
+            tiles[2].metric("Nullzählungen", int((outflow.value == 0).sum()), border=True)
+            tiles[3].metric("Effektiv je Analyse (mL)", _volume_span(outflow.effective_volume_ml), border=True,
+                            help="Effektives Originalwasservolumen je Analyse nach Anreicherung, Verdünnung und Wiederfindung.")
+            st.markdown("**Berechnete Ablaufkonzentrationen**")
+            preview = outflow[["sample_id","replicate_id","value","effective_volume_ml","concentration_100ml","zero_convention_100ml"]].rename(columns={
+                "sample_id":"Probe", "replicate_id":"Replikat", "value":"Count", "effective_volume_ml":"Effektiv (mL)",
+                "concentration_100ml":"Count / effektives Volumen (je 100 mL)", "zero_convention_100ml":"Gl. 5-2 Nenner (je 100 mL)"})
+            st.dataframe(preview, hide_index=True, width="stretch")
+            st.caption("Kontrollieren Sie besonders das effektive Volumen. Der Nenner nach Gleichung 5-2 setzt nur für die Leitfadenrechnung einen Count von 0 auf 1. Im statistischen Modell bleibt eine Null eine beobachtete Null.")
+
+    with st.container(border=True, key="vr_step3"):
+        section_head(3, "Messbegrenzte LRV nach Leitfaden", locked=guideline.empty)
+        st.write("Diese Ausgabe verwendet zusammengehörige Zu- und Ablaufproben. Tragen Sie dafür bei beiden Proben dieselbe Paar-ID ein.")
+        if pairing_error:
+            st.error(f"Paarung: {pairing_error}")
+        if guideline.empty:
+            st.info("Noch keine vollständigen Paare: Bei der zugehörigen Zu- und Ablaufprobe dieselbe Paar-ID eintragen. Die Position einer Zeile wird nicht als Paarung verwendet.")
+        else:
+            shown = guideline.rename(columns={
+                "pair_id":"Paar-ID", "inflow_sample_id":"Zulaufprobe", "outflow_sample_id":"Ablaufprobe",
+                "count":"Gesamt-Count", "effective_volume_ml":"Effektiv gesamt (mL)",
+                "inflow_concentration_100ml":"Zulauf (/100 mL)",
+                "effluent_denominator_100ml":"Ablaufnenner Gl. 5-2 (/100 mL)",
+                "guideline_lrv":"Messbegrenzte LRV",
+            })
+            descriptive_q = float(np.quantile(guideline.guideline_lrv, q / 100.))
+            headline, table = st.columns([0.28, 0.72], gap="medium")
+            headline.metric(f"Deskriptives q{q}", f"{descriptive_q:.2f} log", border=True,
+                            help=f"Perzentil über die {len(guideline)} gepaarten Leitfaden-LRV.")
+            table.dataframe(shown, hide_index=True, width="stretch",
+                            column_config={"Messbegrenzte LRV": st.column_config.NumberColumn(format="%.2f")})
+            st.caption("Technische Ablaufreplikate werden je Umweltprobe aus Counts und getrennten effektiven Volumina zusammengefasst. Die Ausgabe ist messbegrenzt und enthält kein Unsicherheitsintervall.")
+            st.download_button("Gepaarte Leitfaden-LRV als CSV herunterladen",
+                               guideline.to_csv(index=False).encode("utf-8"),
+                               file_name=f"validreuse_{pid}_leitfaden_lrv.csv", mime="text/csv")
+
+    with st.container(border=True, key="vr_step4"):
+        unlocked = model_ready or has_result
+        section_head(4, "Modellbasierte Auswertung", locked=not unlocked)
+        st.write("Die Modelle schätzen Konzentrationen aus Counts und individuellen Volumina. So werden Zählunsicherheit und Unterschiede zwischen Umweltproben getrennt berücksichtigt.")
+        if unlocked:
+            _model_section(parameter, pid, raw_in, raw_out, inflow, outflow, guideline, q, errors, result_key)
+        else:
+            missing = []
+            if errors:
+                missing.append("fehlerfreie Eingaben in beiden Tabellen")
+            if len(inflow) < 2:
+                missing.append("mindestens zwei Zulaufkonzentrationen")
+            if out_samples < 2:
+                missing.append("mindestens zwei unabhängige Ablaufproben")
+            st.info("Für die modellbasierte Auswertung fehlt noch: " + " sowie ".join(missing) + ".")
+
+
+def _model_section(parameter, pid, raw_in, raw_out, inflow, outflow, guideline, q, errors, result_key):
+    """Model choice, assumptions, the fit itself and its results."""
     selected = st.multiselect("Ablaufmodelle vor der Auswertung festlegen", list(FAMILIES), default=list(FAMILIES),
                               help="Poisson-Lognormal ist der Hauptkandidat; die Negativbinomialverteilung zeigt die Empfindlichkeit gegenüber einer anderen Mischverteilung.")
     st.caption("Poisson-Lognormal ist der erste Kandidat; Negativbinomial dient als Vergleich. Die App wählt nicht automatisch das Modell mit dem höheren Ergebnis.")
-    independent = st.checkbox("Ich bestätige: Eine ungepaarte Auswertung mit unabhängigen Zu- und Ablaufverteilungen ist für diese Fragestellung angemessen.", value=False,
-                              help="Bestätigen Sie dies nur, wenn die Verteilungen unabhängig verglichen werden sollen.")
-    st.caption("Paar-IDs bleiben dokumentiert, werden in dieser Modellrechnung aber nicht als Korrelation verwendet. Bei zeitlich gepaarten Proben muss die Unabhängigkeitsannahme fachlich begründet sein.")
-    target = st.number_input("LRV-Zielwert", min_value=0., value=float(parameter["target"]), step=.1, key=f"target_{pid}",
-                             help="Die untere Unsicherheitsgrenze wird mit diesem fachlich festgelegten Zielwert verglichen.")
-    with st.expander("Erweiterte Recheneinstellungen und Annahmen"):
-        st.write("Mehr Ziehungen können stabilere Schätzungen liefern, verlängern aber die Rechenzeit. Die Standardwerte sind für eine erste vollständige Auswertung vorgesehen.")
-        draws = st.number_input("Ziehungen je Kette", min_value=200,max_value=10000,value=1000,step=100,
-                                help="Ausgewertete Zufallsziehungen je Rechenkette nach dem Warmup.")
-        warmup = st.number_input("Warmup je Kette", min_value=200,max_value=10000,value=1000,step=100,
-                                 help="Anpassungsphase jeder Rechenkette; diese Ziehungen fließen nicht in das Ergebnis ein.")
-        chains = st.number_input("Anzahl Ketten",min_value=2,max_value=4,value=2,
-                                 help="Unabhängige Rechenketten zur Prüfung, ob die Schätzung stabil zusammenläuft.")
-        alpha = st.selectbox("Alpha der einseitigen Untergrenze",[.05,.1,.2],
-                             help="Alpha 0,05 ergibt eine einseitige 95-%-Kredibilitätsuntergrenze.")
-        seed = st.number_input("Zufalls-Seed",min_value=0,max_value=2**32-1,value=42,
-                               help="Gleiche Daten, Einstellungen und Seed ermöglichen eine reproduzierbare Rechnung.")
-        st.caption("Feste Priors auf ln(Konzentration /100 mL): Zulaufmittel N(0,10), Zulaufstreuung HalfNormal(2); Ablaufmittel N(0,5). PLN-Streuung HalfNormal(2); NB log(shape) N(0,1.5). Wiederfindung und Volumina gelten als bekannt. Prior- und Wiederfindungssensitivitaet sind noch nicht automatisiert.")
+    assumptions, advanced = st.columns([0.58, 0.42], gap="large")
+    with assumptions:
+        independent = st.checkbox("Ich bestätige: Eine ungepaarte Auswertung mit unabhängigen Zu- und Ablaufverteilungen ist für diese Fragestellung angemessen.", value=False,
+                                  help="Bestätigen Sie dies nur, wenn die Verteilungen unabhängig verglichen werden sollen.")
+        st.caption("Paar-IDs bleiben dokumentiert, werden in dieser Modellrechnung aber nicht als Korrelation verwendet. Bei zeitlich gepaarten Proben muss die Unabhängigkeitsannahme fachlich begründet sein.")
+        target = st.number_input("LRV-Zielwert", min_value=0., value=float(parameter["target"]), step=.1, key=f"target_{pid}",
+                                 help="Die untere Unsicherheitsgrenze wird mit diesem fachlich festgelegten Zielwert verglichen.")
+    with advanced:
+        with st.expander("Erweiterte Recheneinstellungen und Annahmen"):
+            st.write("Mehr Ziehungen können stabilere Schätzungen liefern, verlängern aber die Rechenzeit. Die Standardwerte sind für eine erste vollständige Auswertung vorgesehen.")
+            draws = st.number_input("Ziehungen je Kette", min_value=200,max_value=10000,value=1000,step=100,
+                                    help="Ausgewertete Zufallsziehungen je Rechenkette nach dem Warmup.")
+            warmup = st.number_input("Warmup je Kette", min_value=200,max_value=10000,value=1000,step=100,
+                                     help="Anpassungsphase jeder Rechenkette; diese Ziehungen fließen nicht in das Ergebnis ein.")
+            chains = st.number_input("Anzahl Ketten",min_value=2,max_value=4,value=2,
+                                     help="Unabhängige Rechenketten zur Prüfung, ob die Schätzung stabil zusammenläuft.")
+            alpha = st.selectbox("Alpha der einseitigen Untergrenze",[.05,.1,.2],
+                                 help="Alpha 0,05 ergibt eine einseitige 95-%-Kredibilitätsuntergrenze.")
+            seed = st.number_input("Zufalls-Seed",min_value=0,max_value=2**32-1,value=42,
+                                   help="Gleiche Daten, Einstellungen und Seed ermöglichen eine reproduzierbare Rechnung.")
+            st.caption("Feste Priors auf ln(Konzentration /100 mL): Zulaufmittel N(0,10), Zulaufstreuung HalfNormal(2); Ablaufmittel N(0,5). PLN-Streuung HalfNormal(2); NB log(shape) N(0,1.5). Wiederfindung und Volumina gelten als bekannt. Prior- und Wiederfindungssensitivitaet sind noch nicht automatisiert.")
     settings = dict(models=selected, target=target, q=q, alpha=alpha, draws=draws, warmup=warmup, chains=chains, seed=seed, independent=independent)
     fingerprint = _fingerprint(raw_in,raw_out,settings)
-    result_key = f"vol_result_{pid}"
     if not PYMC_AVAILABLE:
         st.error("Diese Auswertung benoetigt PyMC in einer unterstuetzten Python-Umgebung (z.B. Python 3.13).")
-    if st.button("Modellbasierte LRV berechnen",type="primary",disabled=not PYMC_AVAILABLE,
+    if st.button("Modellbasierte LRV berechnen",type="primary",disabled=not PYMC_AVAILABLE,width="stretch",
                  help="Startet beide ausgewählten Modelle mit den geprüften Eingaben."):
         st.session_state.pop(result_key,None)
         if errors or not selected or not independent:
@@ -295,16 +412,17 @@ Alle Volumina in **mL**. Verdünnungsfaktor 10 bedeutet 1:10; ohne Verdünnung 1
     if saved["fingerprint"] != fingerprint:
         st.info("Eingaben oder Einstellungen wurden geaendert. Fuer aktuelle Ergebnisse erneut berechnen.")
         return
-    st.subheader("Ergebnisse: modellbasierte Konzentrations-LRV")
+    st.divider()
+    st.markdown("#### Ergebnisse: modellbasierte Konzentrations-LRV")
     st.caption(f"q{q} der Population bei unabhaengigem Zu-/Ablauf. Untergrenze: einseitige {(1-alpha)*100:g}%-Kredibilitaetsgrenze. Experimentelle Kandidaten; keine Gleichsetzung mit der messbegrenzten Leitfaden-LRV oder einer regulatorischen Freigabe.")
-    with st.expander("So lesen Sie die Ergebnistabelle", expanded=True):
+    summary_container = st.container()
+    with st.expander("So lesen Sie die Ergebnistabelle"):
         st.markdown("""
 - **Untere Grenze:** vorsichtige, einseitige Unsicherheitsgrenze für das gewählte Populationsperzentil. Dieser Wert wird mit dem Zielwert verglichen.
 - **Median q:** mittlere Lage der posterioren Schätzung des Populationsperzentils; nicht als alleiniger Freigabewert verwenden.
 - **Status:** Das Modellkriterium ist erreicht, wenn die untere Grenze mindestens dem Zielwert entspricht und die Diagnostik keine Warnung enthält.
 - **Modellspanne:** Unterschied zwischen den Kandidatenmodellen. Eine große Spanne weist auf Modellabhängigkeit hin und sollte fachlich geprüft werden.
 """)
-    summary_container = st.container()
     rows = []
     for label,error in saved["result"]["errors"].items():
         st.error(f"{label}: {error}")
@@ -313,16 +431,26 @@ Alle Volumina in **mL**. Verdünnungsfaktor 10 bedeutet 1:10; ohne Verdünnung 1
         rows.append({"Modell":label,"Untere Grenze":round(result["L_alpha"],2),"Median q":round(result["median"],2),"Status":status})
         with st.expander(f"{label}: Diagnostik und praediktive Pruefung",expanded=True):
             d = result["diagnostics"]
-            st.write({"Max. R-hat": None if d["max_rhat"] is None else round(d["max_rhat"], 3),
-                      "Min. Tail-ESS": None if d["min_tail_ess"] is None else round(d["min_tail_ess"]),
-                      "Divergenzen": d["divergences"],
-                      "Monte-Carlo-Fehler der Untergrenze (log)": None if d["lower_bound_mcse"] is None else round(d["lower_bound_mcse"], 3)})
+            diag = st.columns(4)
+            diag[0].metric("Max. R-hat", "—" if d["max_rhat"] is None else f"{d['max_rhat']:.3f}", border=True,
+                           help="Werte bis etwa 1,01 sprechen für stabil zusammengelaufene Ketten.")
+            diag[1].metric("Min. Tail-ESS", "—" if d["min_tail_ess"] is None else f"{round(d['min_tail_ess']):d}", border=True,
+                           help="Effektive Stichprobengröße in den Verteilungsrändern.")
+            diag[2].metric("Divergenzen", d["divergences"], border=True,
+                           help="Divergente Übergänge weisen auf eine unzuverlässige Anpassung hin.")
+            diag[3].metric("MC-Fehler Untergrenze", "—" if d["lower_bound_mcse"] is None else f"{d['lower_bound_mcse']:.3f}", border=True,
+                           help="Monte-Carlo-Fehler der Untergrenze in log-Einheiten.")
             for warning in result["warnings"]:
                 st.warning(warning)
-            st.dataframe(pd.DataFrame(result["predictive_checks"]).rename(columns={"statistic":"Statistik","observed":"Beobachtet","low":"Praediktiv 5%","median":"Praediktiv 50%","high":"Praediktiv 95%"}),hide_index=True)
+            st.dataframe(pd.DataFrame(result["predictive_checks"]).rename(columns={"statistic":"Statistik","observed":"Beobachtet","low":"Praediktiv 5%","median":"Praediktiv 50%","high":"Praediktiv 95%"}),hide_index=True,width="stretch")
             st.caption("Neue Umweltproben bei den eingegebenen Volumina; Replikate teilen eine Konzentration. Die Intervalle dienen der Modellpruefung, nicht als formaler Anpassungstest.")
     if rows:
-        summary_container.dataframe(pd.DataFrame(rows),hide_index=True,width="stretch")
+        with summary_container:
+            headline = st.columns(len(rows))
+            for column, row in zip(headline, rows):
+                column.metric(row["Modell"], f"{row['Untere Grenze']:.2f} log", border=True,
+                              delta=f"{row['Untere Grenze'] - target:+.2f} gegenüber Zielwert {target:g}")
+            st.dataframe(pd.DataFrame(rows),hide_index=True,width="stretch")
         if len(rows)>1:
             bounds = [r["L_alpha"] for r in saved["result"]["results"].values()]
             st.write(f"Spanne der unteren Grenzen ueber die Kandidaten: **{np.ptp(bounds):.2f} log**.")
