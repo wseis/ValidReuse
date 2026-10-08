@@ -70,6 +70,30 @@ Note:
 - PyMC makes deployment heavier than a simple Streamlit app.
 - If you want the lightest deployment, we can make the PyMC method optional or disable it in cloud builds.
 
+## Quality-managed assessments
+
+The **QM-Bewertungen** workspace adds persistent assessments, original-report
+retention, authenticated author/reviewer roles, documented suitability checks,
+versioned paired-LRV decision protocols, controlled exclusions, immutable revision
+history, independent release and linked amendments. Exports include a printable
+HTML report, originals and the audit/calculation archive.
+
+See [QM_WORKFLOW.md](QM_WORKFLOW.md) for personal account setup, the first
+milestone's scope, backup instructions and validation requirements before routine
+official use. Local accounts must be provisioned before signing into this workspace;
+no default passwords are provided.
+
+## Documentation workspace
+
+The sidebar workspace **Dokumentation und Formeln** documents every quantity the app
+reports, with its formula: the three volume methods and the constraints on them,
+exposure and unit conversion, Eq. 5-1/5-2 and the paired guideline LRV, the model
+likelihood and priors, the closed-form and numerical population quantiles, the
+diagnostic thresholds and the status logic, plus the legacy methods and a symbol
+table. Each section names the function that implements it, and the volume section
+includes a live calculator that calls `sample_data.effective_volume` directly, so
+the worked example cannot drift from the code.
+
 ## Counts and individual sample volumes
 
 The default workspace now accepts assay-level effluent counts and sample-specific

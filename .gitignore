@@ -11,3 +11,4 @@ r_libs/
 .pytensor_cache/
 comparison_results_10x12.json
 edge_case_results.json
+.qm_data/

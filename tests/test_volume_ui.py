@@ -32,5 +32,18 @@ class VolumeUITests(unittest.TestCase):
         self.assertTrue(at.error)
         self.assertNotIn('vol_result_ecoli',at.session_state)
 
+    def test_documentation_workspace_renders_every_section(self):
+        at=AppTest.from_file('app.py',default_timeout=30).run()
+        at.sidebar.radio[0].set_value('Dokumentation und Formeln').run()
+        self.assertFalse(at.exception)
+        self.assertFalse(at.error)
+        # The volume calculator must reproduce the documented worked example.
+        formulas='\n'.join(block.value for block in at.latex)
+        self.assertIn(r'V_{\mathrm{eff}}',formulas)
+        self.assertIn(r'\log_{10}',formulas)
+        metrics={m.label:m.value for m in at.metric}
+        self.assertEqual(metrics[r'$V_{\mathrm{eff}}$ (mL)'],'1875')
+        self.assertEqual(metrics[r'$c_{\mathrm{Ablauf}}$ (je 100 mL)'],'0.16')
+
 
 if __name__=='__main__': unittest.main()
