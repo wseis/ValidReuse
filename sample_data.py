@@ -154,12 +154,46 @@ def validate_table(table: pd.DataFrame, side: str) -> pd.DataFrame:
     return result
 
 
-def model_arrays(inflow, outflow):
+def model_arrays(inflow, outflow, paired=False):
+    """Arrays for the count candidates.
+
+    Unpaired (the default) passes every influent concentration, so historical
+    influent data stay usable. ``paired=True`` returns exactly one influent
+    concentration per environmental effluent sample, matched by pair ID and
+    ordered by the effluent sample grouping, as the conditional candidates in
+    ``count_models`` require.
+    """
     if len(inflow) < 2 or outflow.empty or outflow.sample_id.nunique() < 2:
         raise ValueError("Mindestens zwei unabhaengige Zulauf- und Ablaufproben erforderlich.")
-    groups, _ = pd.factorize(outflow.sample_id, sort=False)
-    return dict(vals_zu=inflow.concentration_100ml.tolist(), vals_ab=outflow.value.tolist(),
-                exposures=outflow.exposure.tolist(), sample_groups=groups.tolist())
+    if not paired:
+        groups, _ = pd.factorize(outflow.sample_id, sort=False)
+        return dict(vals_zu=inflow.concentration_100ml.tolist(), vals_ab=outflow.value.tolist(),
+                    exposures=outflow.exposure.tolist(), sample_groups=groups.tolist())
+
+    in_pairs = inflow.assign(pair_id=inflow.pair_id.map(_text))
+    out_pairs = outflow.assign(pair_id=outflow.pair_id.map(_text))
+    in_pairs = in_pairs[in_pairs.pair_id != ""]
+    out_pairs = out_pairs[out_pairs.pair_id != ""]
+    if in_pairs.empty or out_pairs.empty:
+        raise ValueError("Bedingte Kandidaten benoetigen Paar-IDs in beiden Tabellen.")
+    if in_pairs.duplicated("pair_id").any():
+        duplicates = sorted(in_pairs.loc[in_pairs.duplicated("pair_id", keep=False), "pair_id"].unique())
+        raise ValueError("Paar-ID im Zulauf nicht eindeutig: " + ", ".join(duplicates))
+    ambiguous = out_pairs.groupby("pair_id").sample_id.nunique()
+    if (ambiguous > 1).any():
+        raise ValueError("Paar-ID verweist auf mehrere unabhaengige Ablaufproben: "
+                         + ", ".join(sorted(ambiguous.index[ambiguous > 1])))
+    matched = out_pairs[out_pairs.pair_id.isin(set(in_pairs.pair_id))]
+    if matched.sample_id.nunique() < 2:
+        raise ValueError("Bedingte Kandidaten benoetigen mindestens zwei vollstaendige Paare "
+                         "aus Zulaufkonzentration und Ablaufprobe.")
+    groups, keys = pd.factorize(matched.sample_id, sort=False)
+    # One influent concentration per effluent sample, in the grouping's own order.
+    pair_of_sample = matched.drop_duplicates("sample_id").set_index("sample_id").pair_id
+    concentration = in_pairs.set_index("pair_id").concentration_100ml
+    return dict(vals_zu=[float(concentration[pair_of_sample[key]]) for key in keys],
+                vals_ab=matched.value.tolist(), exposures=matched.exposure.tolist(),
+                sample_groups=groups.tolist())
 
 
 def guideline_lrv_pairs(inflow: pd.DataFrame, outflow: pd.DataFrame) -> pd.DataFrame:
@@ -168,10 +202,17 @@ def guideline_lrv_pairs(inflow: pd.DataFrame, outflow: pd.DataFrame) -> pd.DataF
     Technical effluent replicates are pooled by environmental sample. Their raw
     counts and disjoint effective volumes are additive. Pair IDs, rather than row
     order or sample IDs, define the influent/effluent match.
+
+    The guide (Kap. 4.6.1) raises the *influent* onto the representative effluent
+    volume ``V_r`` by the factor ``V_r/100 mL`` (Eq. 4-3), because a negative
+    effluent finding must not be scaled up to a larger volume. Dividing the count
+    down to 100 mL instead, as ``effluent_denominator_100ml`` does, is the same
+    ratio and is kept for reporting; ``guideline_lrv`` follows the guide's own
+    direction so the code mirrors the document.
     """
     columns = ["pair_id", "inflow_sample_id", "outflow_sample_id", "count",
-               "effective_volume_ml", "inflow_concentration_100ml",
-               "effluent_denominator_100ml", "guideline_lrv"]
+               "effective_volume_ml", "reference_factor", "inflow_concentration_100ml",
+               "inflow_concentration_reference", "effluent_denominator_100ml", "guideline_lrv"]
     if inflow.empty or outflow.empty:
         return pd.DataFrame(columns=columns)
 
@@ -197,12 +238,15 @@ def guideline_lrv_pairs(inflow: pd.DataFrame, outflow: pd.DataFrame) -> pd.DataF
     )
     if paired.empty:
         return pd.DataFrame(columns=columns)
-    paired["effluent_denominator_100ml"] = (
-        np.maximum(paired["count"].to_numpy(dtype=float), 1.)
-        / (paired["effective_volume_ml"].to_numpy(dtype=float) / 100.)
+    floored_count = np.maximum(paired["count"].to_numpy(dtype=float), 1.)
+    # Eq. 4-3: the influent is expressed per representative effluent volume.
+    paired["reference_factor"] = paired["effective_volume_ml"].to_numpy(dtype=float) / 100.
+    paired["inflow_concentration_reference"] = (
+        paired["concentration_100ml"].to_numpy(dtype=float) * paired["reference_factor"]
     )
+    paired["effluent_denominator_100ml"] = floored_count / paired["reference_factor"]
     paired["guideline_lrv"] = np.log10(
-        paired["concentration_100ml"] / paired["effluent_denominator_100ml"]
+        paired["inflow_concentration_reference"] / floored_count
     )
     return paired.rename(columns={
         "sample_id_in": "inflow_sample_id", "sample_id_out": "outflow_sample_id",

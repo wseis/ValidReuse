@@ -58,6 +58,22 @@ class VolumeDataTests(unittest.TestCase):
         expected = np.log10(8_000_000 / (12 / 37.5))
         self.assertAlmostEqual(paired.iloc[0]['guideline_lrv'], expected)
 
+    def test_reference_factor_raises_influent_instead_of_scaling_the_effluent(self):
+        """Kap. 4.6.1: the influent is lifted onto V_r; the zero count stays put."""
+        self.ins.loc[0, 'pair_id'] = 'P-1'
+        self.outs.loc[0, 'pair_id'] = 'P-1'
+        self.outs.loc[0, 'value'] = 0
+        paired = guideline_lrv_pairs(validate_table(self.ins, 'in'), validate_table(self.outs, 'out'))
+        row = paired.iloc[0]
+        self.assertEqual(row['reference_factor'], 18.75)
+        self.assertEqual(row['inflow_concentration_reference'], 8_000_000 * 18.75)
+        # Eq. 4-3 over the floored count, and the per-100-mL form, are the same ratio.
+        self.assertAlmostEqual(row['guideline_lrv'], np.log10(row['inflow_concentration_reference'] / 1.))
+        self.assertAlmostEqual(row['guideline_lrv'],
+                               np.log10(row['inflow_concentration_100ml'] / row['effluent_denominator_100ml']))
+        # The enrichment, not the zero, is what buys the extra orders of magnitude.
+        self.assertAlmostEqual(row['guideline_lrv'] - np.log10(8_000_000), np.log10(18.75))
+
     def test_guideline_lrv_zero_uses_one_count_over_total_exposure(self):
         self.ins.loc[0, 'pair_id'] = 'P-1'
         self.outs.loc[0, 'pair_id'] = 'P-1'
@@ -65,6 +81,43 @@ class VolumeDataTests(unittest.TestCase):
         paired = guideline_lrv_pairs(validate_table(self.ins, 'in'), validate_table(self.outs, 'out'))
         self.assertAlmostEqual(paired.iloc[0]['effluent_denominator_100ml'], 1 / 18.75)
         self.assertAlmostEqual(paired.iloc[0]['guideline_lrv'], np.log10(8_000_000 * 18.75))
+
+    def test_paired_model_arrays_align_influent_with_effluent_samples(self):
+        """Conditional candidates need one influent value per effluent sample, in group order."""
+        self.outs = self.outs.iloc[::-1].reset_index(drop=True)
+        self.ins['value'] = [10.**(3 + k) for k in range(len(self.ins))]
+        inflow, outflow = validate_table(self.ins, 'in'), validate_table(self.outs, 'out')
+        arrays = model_arrays(inflow, outflow, paired=True)
+        groups = np.asarray(arrays['sample_groups'])
+        self.assertEqual(len(arrays['vals_zu']), len(np.unique(groups)))
+        lookup = inflow.set_index('pair_id').concentration_100ml
+        for group, (_, row) in enumerate(outflow.drop_duplicates('sample_id').iterrows()):
+            self.assertEqual(arrays['vals_zu'][group], float(lookup[row.pair_id]))
+        validate_payload(dict(family='conditional_poisson_lognormal', **arrays))
+
+    def test_paired_model_arrays_drop_unmatched_influent_and_pool_replicates(self):
+        historical = self.ins.iloc[[0]].copy()
+        historical['sample_id'], historical['pair_id'] = 'IN-HIST', ''
+        self.ins = pd.concat([self.ins, historical], ignore_index=True)
+        replicate = self.outs.iloc[[0]].copy()
+        replicate['replicate_id'] = '2'
+        self.outs = pd.concat([self.outs, replicate], ignore_index=True)
+        inflow, outflow = validate_table(self.ins, 'in'), validate_table(self.outs, 'out')
+        unpaired = model_arrays(inflow, outflow)
+        paired = model_arrays(inflow, outflow, paired=True)
+        # The historical influent value stays available to the unpaired candidates only.
+        self.assertEqual(len(unpaired['vals_zu']), len(paired['vals_zu']) + 1)
+        self.assertEqual(len(paired['vals_ab']), len(outflow))
+        self.assertEqual(len(paired['vals_zu']), outflow.sample_id.nunique())
+        with self.assertRaises(ValueError):
+            validate_payload(dict(family='conditional_poisson_lognormal', **unpaired))
+
+    def test_paired_model_arrays_require_pair_ids(self):
+        self.ins['pair_id'] = ''
+        inflow, outflow = validate_table(self.ins, 'in'), validate_table(self.outs, 'out')
+        model_arrays(inflow, outflow)
+        with self.assertRaises(ValueError):
+            model_arrays(inflow, outflow, paired=True)
 
     def test_units(self):
         baseline = validate_table(self.ins,'in').concentration_100ml

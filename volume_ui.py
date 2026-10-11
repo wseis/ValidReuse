@@ -7,6 +7,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+import altair as alt
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -16,7 +17,13 @@ from sample_data import (COLUMNS, RESULT_TYPES, VOLUME_METHODS, empty_table, exa
 from pymc_bayesian import PYMC_AVAILABLE, pymc_q10_lrv_batch
 from ui_theme import hero, inject_css, section_head
 
-FAMILIES = {"Poisson-Lognormal": "poisson_lognormal", "Negativbinomial (Poisson-Gamma)": "negative_binomial"}
+FAMILIES = {"Poisson-Lognormal": "poisson_lognormal",
+            "Negativbinomial (Poisson-Gamma)": "negative_binomial",
+            "Bedingt · Poisson-Lognormal": "conditional_poisson_lognormal",
+            "Bedingt · Negativbinomial": "conditional_negative_binomial"}
+UNPAIRED = [label for label, family in FAMILIES.items() if not family.startswith("conditional_")]
+SLOPE_LABELS = {"b frei geschätzt": "free", "b = 1 (vollständig gepaart)": "unit",
+                "b = 0 (unabhängig)": "zero"}
 TEMPLATE_PATH = Path(__file__).with_name("assets") / "ValidReuse_Datenvorlage.xlsx"
 LABELS = {
     "sample_id": "Proben-ID", "replicate_id": "Replikat-ID", "date": "Datum / Uhrzeit",
@@ -77,6 +84,7 @@ def _sidebar_panel(indicator, pid, inflow, outflow, guideline, errors):
             ("Analysen", str(len(outflow))),
             ("Nullzählungen", str(int((outflow.value == 0).sum()))),
             ("Effektiv je Analyse", f"{_volume_span(outflow.effective_volume_ml)} mL"),
+            ("Bezugsfaktor", _volume_span(outflow.exposure)),
         ]
     rows.append(("Gepaarte LRV", str(len(guideline))))
 
@@ -249,7 +257,7 @@ def render_volume_workflow(parameters):
 
 Alle Volumina in **mL**. Verdünnungsfaktor 10 bedeutet 1:10; ohne Verdünnung 1. Wiederfindung 0,5 bedeutet 50 %. Eine Quelle oder ausdrückliche Annahme ist erforderlich.
 
-15 000 mL filtriert, 400 mL Eluat, 100 mL analysiert und 50 % Wiederfindung ergeben **1 875 mL effektives Volumen**. Drei Counts entsprechen dann **0,16 /100 mL**.
+15 000 mL filtriert, 400 mL Eluat, 100 mL analysiert und 50 % Wiederfindung ergeben **1 875 mL effektives Volumen** (Leitfaden Gl. 4-1 und 4-2). Daraus folgt der **Bezugsfaktor 18,75**: Die Zulaufkonzentration wird für den Vergleich mit 18,75 multipliziert (Gl. 4-3), nicht der Ablauf heruntergerechnet. Die Anreicherung macht so rund **1,3 log zusätzliche Reduktion** nachweisbar — auch dann, wenn im Ablauf null gezählt wird.
 
 **Technische Replikate:** gleiche Proben-ID, unterschiedliche Replikat-ID und getrennte analysierte Aliquots. Sie teilen im Modell eine Konzentration. Fehlende Ergebnisse als `missing` dokumentieren; `<LOD`, `<LOQ`, MPN und Konzentrationen im Ablauf werden gespeichert, aber für diese Count-Auswertung nicht automatisch umgerechnet.""")
         t1,t2 = st.tabs(["Zulaufkonzentrationen", "Ablauf: Counts und Volumina"])
@@ -300,23 +308,29 @@ Alle Volumina in **mL**. Verdünnungsfaktor 10 bedeutet 1:10; ohne Verdünnung 1
         if outflow.empty:
             st.caption("Sobald eine gültige Ablaufzeile mit Count und Volumenangabe vorliegt, erscheinen hier die berechneten effektiven Volumina.")
         else:
-            tiles = st.columns(4)
+            tiles = st.columns(5)
             tiles[0].metric("Ablaufproben", out_samples, border=True,
                             help="Unabhängige Umweltproben; technische Replikate zählen nicht doppelt.")
             tiles[1].metric("Analysen", len(outflow), border=True)
             tiles[2].metric("Nullzählungen", int((outflow.value == 0).sum()), border=True)
             tiles[3].metric("Effektiv je Analyse (mL)", _volume_span(outflow.effective_volume_ml), border=True,
-                            help="Effektives Originalwasservolumen je Analyse nach Anreicherung, Verdünnung und Wiederfindung.")
-            st.markdown("**Berechnete Ablaufkonzentrationen**")
-            preview = outflow[["sample_id","replicate_id","value","effective_volume_ml","concentration_100ml","zero_convention_100ml"]].rename(columns={
-                "sample_id":"Probe", "replicate_id":"Replikat", "value":"Count", "effective_volume_ml":"Effektiv (mL)",
-                "concentration_100ml":"Count / effektives Volumen (je 100 mL)", "zero_convention_100ml":"Gl. 5-2 Nenner (je 100 mL)"})
+                            help="Effektives Originalwasservolumen je Analyse nach Anreicherung, Verdünnung und Wiederfindung (Leitfaden Gl. 4-2).")
+            tiles[4].metric("Bezugsfaktor", _volume_span(outflow.exposure), border=True,
+                            help="V_eff / 100 mL. Mit diesem Faktor wird die Zulaufkonzentration auf das repräsentative Ablaufvolumen angehoben (Leitfaden Gl. 4-3).")
+            st.info("**So wird gerechnet (Leitfaden Kap. 4.6.1):** Der Bezugsfaktor V_eff/100 mL wird auf die **Zulaufkonzentration** angewandt (Gl. 4-3), nicht auf den Ablauf. Der Ablaufcount bleibt die gezählte Zahl – bei null gezählten Einheiten nach Gl. 5-2 die 1, und zwar eine Einheit im effektiven Volumen der Probe, nicht eine je 100 mL.")
+            st.markdown("**Berechnete Ablaufgrößen**")
+            preview = outflow[["sample_id","replicate_id","value","effective_volume_ml","exposure","concentration_100ml","zero_convention_100ml"]].rename(columns={
+                "sample_id":"Probe", "replicate_id":"Replikat", "value":"Count", "effective_volume_ml":"Effektiv V_eff (mL)",
+                "exposure":"Bezugsfaktor V_eff/100 mL", "concentration_100ml":"Count je 100 mL (nur Bericht)",
+                "zero_convention_100ml":"Gl. 5-2 Nenner (je 100 mL)"})
             st.dataframe(preview, hide_index=True, width="stretch")
-            st.caption("Kontrollieren Sie besonders das effektive Volumen. Der Nenner nach Gleichung 5-2 setzt nur für die Leitfadenrechnung einen Count von 0 auf 1. Im statistischen Modell bleibt eine Null eine beobachtete Null.")
+            st.caption("Kontrollieren Sie besonders das effektive Volumen und den daraus folgenden Bezugsfaktor. Die Spalte »Count je 100 mL« ist eine reine Berichtsgröße: Bei Count 0 steht dort 0, und das sagt nichts über die Leistung der Anlage – die Aussage steckt im Bezugsfaktor. Der Nenner nach Gl. 5-2 setzt nur für die Leitfadenrechnung einen Count von 0 auf 1. Im statistischen Modell bleibt eine Null eine beobachtete Null.")
 
     with st.container(border=True, key="vr_step3"):
         section_head(3, "Messbegrenzte LRV nach Leitfaden", locked=guideline.empty)
         st.write("Diese Ausgabe verwendet zusammengehörige Zu- und Ablaufproben. Tragen Sie dafür bei beiden Proben dieselbe Paar-ID ein.")
+        st.markdown("Gerechnet wird in der Laufrichtung des Leitfadens: Der Zulauf wird mit dem Bezugsfaktor auf das repräsentative Ablaufvolumen angehoben (Gl. 4-3), der Ablauf bleibt die gezählte Zahl – bei null gezählten Einheiten nach Gl. 5-2 die 1.")
+        st.latex(r"\mathrm{LRV} = \log_{10}\!\left(\frac{c_{\mathrm{Zulauf}} \cdot V_{\mathrm{eff}}/100\,\mathrm{mL}}{\max(k,\,1)}\right)")
         if pairing_error:
             st.error(f"Paarung: {pairing_error}")
         if guideline.empty:
@@ -325,7 +339,9 @@ Alle Volumina in **mL**. Verdünnungsfaktor 10 bedeutet 1:10; ohne Verdünnung 1
             shown = guideline.rename(columns={
                 "pair_id":"Paar-ID", "inflow_sample_id":"Zulaufprobe", "outflow_sample_id":"Ablaufprobe",
                 "count":"Gesamt-Count", "effective_volume_ml":"Effektiv gesamt (mL)",
+                "reference_factor":"Bezugsfaktor V_eff/100 mL",
                 "inflow_concentration_100ml":"Zulauf (/100 mL)",
+                "inflow_concentration_reference":"Zulauf bezogen auf V_eff, Gl. 4-3",
                 "effluent_denominator_100ml":"Ablaufnenner Gl. 5-2 (/100 mL)",
                 "guideline_lrv":"Messbegrenzte LRV",
             })
@@ -335,7 +351,7 @@ Alle Volumina in **mL**. Verdünnungsfaktor 10 bedeutet 1:10; ohne Verdünnung 1
                             help=f"Perzentil über die {len(guideline)} gepaarten Leitfaden-LRV.")
             table.dataframe(shown, hide_index=True, width="stretch",
                             column_config={"Messbegrenzte LRV": st.column_config.NumberColumn(format="%.2f")})
-            st.caption("Technische Ablaufreplikate werden je Umweltprobe aus Counts und getrennten effektiven Volumina zusammengefasst. Die Ausgabe ist messbegrenzt und enthält kein Unsicherheitsintervall.")
+            st.caption("Technische Ablaufreplikate werden je Umweltprobe aus Counts und getrennten effektiven Volumina zusammengefasst; Bezugsfaktor und angehobener Zulauf beziehen sich auf das gepoolte Volumen. Die Ausgabe ist messbegrenzt und enthält kein Unsicherheitsintervall: Ohne Nachweis im Ablauf begrenzt der Bezugsfaktor, wie viel Reduktion überhaupt belegbar ist.")
             st.download_button("Gepaarte Leitfaden-LRV als CSV herunterladen",
                                guideline.to_csv(index=False).encode("utf-8"),
                                file_name=f"validreuse_{pid}_leitfaden_lrv.csv", mime="text/csv")
@@ -357,16 +373,93 @@ Alle Volumina in **mL**. Verdünnungsfaktor 10 bedeutet 1:10; ohne Verdünnung 1
             st.info("Für die modellbasierte Auswertung fehlt noch: " + " sowie ".join(missing) + ".")
 
 
+RECOVERY_GRID = [.01, .02, .05, .10, .20, .50, .80, 1.]
+
+
+def _shared_recovery(outflow):
+    """The one recovery every analysis shares, or None when they differ."""
+    if outflow.empty or (outflow.volume_method == "effective").any():
+        return None
+    values = pd.to_numeric(outflow.recovery, errors="coerce")
+    return None if values.isna().any() or values.nunique() != 1 else float(values.iloc[0])
+
+
+def _recovery_sensitivity(outflow, results, target, alpha):
+    """V_eff is linear in the recovery, so every LRV moves by log10(R/R0).
+
+    The curve is an analytic shift of the fitted bounds, not a refit: exact for the
+    guideline LRV and accurate to well under 0.1 log for the model candidates.
+    """
+    st.markdown("#### Empfindlichkeit gegenüber der Wiederfindung")
+    base = _shared_recovery(outflow)
+    if base is None:
+        st.caption("Die Ablaufanalysen teilen keine gemeinsame Wiederfindung, oder mindestens eine Zeile "
+                   "verwendet ein extern berechnetes Volumen. Eine gemeinsame Wiederfindungsachse ist dann "
+                   "nicht definiert. Allgemein gilt: Ein gemeinsamer Faktor f auf alle effektiven Volumina "
+                   "verschiebt jede LRV um log10(f).")
+        return
+    st.caption(f"Angesetzt sind {base*100:g} % Wiederfindung. Das effektive Volumen ist linear in der "
+               f"Wiederfindung, die LRV also um log10(R/{base:g}) verschoben. Die Kurven sind eine "
+               "analytische Verschiebung der angepassten Grenzen, keine Neuanpassung.")
+
+    grid = np.logspace(-2., 0., 161)
+    curves = pd.concat([pd.DataFrame({"Wiederfindung": grid*100., "Modell": label,
+                                      "Untere Grenze": result["L_alpha"] + np.log10(grid/base)})
+                        for label, result in results.items()], ignore_index=True)
+    axis = alt.Axis(title="Wiederfindung (%)", values=[1, 2, 5, 10, 20, 50, 100], format="g")
+    lines = alt.Chart(curves).mark_line().encode(
+        x=alt.X("Wiederfindung:Q", scale=alt.Scale(type="log", domain=[1., 100.]), axis=axis),
+        y=alt.Y("Untere Grenze:Q", scale=alt.Scale(zero=False, nice=True),
+                axis=alt.Axis(title=f"Untere {(1-alpha)*100:g}%-Grenze (log)")),
+        color=alt.Color("Modell:N", legend=alt.Legend(orient="bottom", title=None)),
+        tooltip=["Modell:N", alt.Tooltip("Wiederfindung:Q", format=".1f"),
+                 alt.Tooltip("Untere Grenze:Q", format=".2f")])
+    goal = alt.Chart(pd.DataFrame({"y": [target]})).mark_rule(strokeDash=[6, 4], color="#b0392b").encode(y="y:Q")
+    here = alt.Chart(pd.DataFrame({"x": [base*100.]})).mark_rule(strokeDash=[2, 3], color="#6b7686").encode(x="x:Q")
+    st.altair_chart(lines + goal + here, width="stretch")
+    st.caption(f"Gestrichelt rot: Zielwert {target:g} log. Gestrichelt grau: angesetzte Wiederfindung.")
+
+    table = pd.DataFrame({"Wiederfindung": [f"{r*100:g} %" for r in RECOVERY_GRID]})
+    for label, result in results.items():
+        table[label] = [result["L_alpha"] + np.log10(r/base) for r in RECOVERY_GRID]
+    st.dataframe(table, hide_index=True, width="stretch",
+                 column_config={label: st.column_config.NumberColumn(label, format="%.2f")
+                                for label in results})
+
+    tiles = st.columns(len(results))
+    for column, (label, result) in zip(tiles, results.items()):
+        critical = base * 10.**(target - result["L_alpha"])
+        shown = ("ueber 100 %" if critical > 1. else f"{critical*100:.2g} %" if critical >= .0001 else "unter 0,01 %")
+        column.metric(f"Grenzwiederfindung {label}", shown, border=True,
+                      help=f"Unterhalb dieser Wiederfindung unterschreitet die untere Grenze den Zielwert "
+                           f"{target:g} log. 'ueber 100 %' bedeutet, dass der Zielwert auch bei vollstaendiger "
+                           "Wiederfindung nicht erreicht wird.")
+    note = ("Die Verschiebung setzt voraus, dass sich die Posteriorverteilung starr mitbewegt. Bei "
+            "Datensaetzen mit Nachweisen im Ablauf stimmt das bis unter 0,05 log; sind alle Counts null, "
+            "traegt der Prior einen Teil des Ergebnisses und die Abweichung kann rund 0,08 log erreichen.")
+    st.caption(note)
+
+
 def _model_section(parameter, pid, raw_in, raw_out, inflow, outflow, guideline, q, errors, result_key):
     """Model choice, assumptions, the fit itself and its results."""
-    selected = st.multiselect("Ablaufmodelle vor der Auswertung festlegen", list(FAMILIES), default=list(FAMILIES),
-                              help="Poisson-Lognormal ist der Hauptkandidat; die Negativbinomialverteilung zeigt die Empfindlichkeit gegenüber einer anderen Mischverteilung.")
-    st.caption("Poisson-Lognormal ist der erste Kandidat; Negativbinomial dient als Vergleich. Die App wählt nicht automatisch das Modell mit dem höheren Ergebnis.")
+    selected = st.multiselect("Ablaufmodelle vor der Auswertung festlegen", list(FAMILIES), default=UNPAIRED,
+                              help="Poisson-Lognormal ist der Hauptkandidat; die Negativbinomialverteilung zeigt die Empfindlichkeit gegenüber einer anderen Mischverteilung. Die bedingten Kandidaten schätzen zusätzlich die Kopplung an den Zulauf.")
+    conditional = [label for label in selected if FAMILIES[label].startswith("conditional_")]
+    unpaired = [label for label in selected if label not in conditional]
+    st.caption("Ungepaart ist der Standard: Zu- und Ablaufverteilung werden unabhängig verglichen, historische Zulaufwerte bleiben nutzbar. Die bedingten Kandidaten setzen je Ablaufprobe eine über die Paar-ID zugeordnete Zulaufkonzentration voraus. Die App wählt nicht automatisch das Modell mit dem höheren Ergebnis.")
     assumptions, advanced = st.columns([0.58, 0.42], gap="large")
     with assumptions:
-        independent = st.checkbox("Ich bestätige: Eine ungepaarte Auswertung mit unabhängigen Zu- und Ablaufverteilungen ist für diese Fragestellung angemessen.", value=False,
-                                  help="Bestätigen Sie dies nur, wenn die Verteilungen unabhängig verglichen werden sollen.")
-        st.caption("Paar-IDs bleiben dokumentiert, werden in dieser Modellrechnung aber nicht als Korrelation verwendet. Bei zeitlich gepaarten Proben muss die Unabhängigkeitsannahme fachlich begründet sein.")
+        independent = True
+        if unpaired:
+            independent = st.checkbox("Ich bestätige: Eine ungepaarte Auswertung mit unabhängigen Zu- und Ablaufverteilungen ist für diese Fragestellung angemessen.", value=False,
+                                      help="Gilt nur für die ungepaarten Kandidaten. Bestätigen Sie dies nur, wenn die Verteilungen unabhängig verglichen werden sollen.")
+            st.caption("Bei den ungepaarten Kandidaten bleiben Paar-IDs dokumentiert, werden aber nicht als Korrelation verwendet. Bei zeitlich gepaarten Proben muss die Unabhängigkeitsannahme fachlich begründet sein.")
+        slope_mode = "free"
+        if conditional:
+            slope_mode = SLOPE_LABELS[st.radio("Kopplung b der bedingten Kandidaten", list(SLOPE_LABELS),
+                                               horizontal=True, key=f"slope_{pid}",
+                                               help="b steuert, wie stark die Ablaufkonzentration der Zulaufkonzentration folgt.")]
+            st.caption("b = 0 reproduziert das ungepaarte Modell, b = 1 eine feste Logreduktion je Probe. Frei geschätzt liegt die App dazwischen und weist das Intervall von b aus; nur der Anteil (1 − b) der Zulaufstreuung erreicht die LRV.")
         target = st.number_input("LRV-Zielwert", min_value=0., value=float(parameter["target"]), step=.1, key=f"target_{pid}",
                                  help="Die untere Unsicherheitsgrenze wird mit diesem fachlich festgelegten Zielwert verglichen.")
     with advanced:
@@ -382,8 +475,9 @@ def _model_section(parameter, pid, raw_in, raw_out, inflow, outflow, guideline, 
                                  help="Alpha 0,05 ergibt eine einseitige 95-%-Kredibilitätsuntergrenze.")
             seed = st.number_input("Zufalls-Seed",min_value=0,max_value=2**32-1,value=42,
                                    help="Gleiche Daten, Einstellungen und Seed ermöglichen eine reproduzierbare Rechnung.")
-            st.caption("Feste Priors auf ln(Konzentration /100 mL): Zulaufmittel N(0,10), Zulaufstreuung HalfNormal(2); Ablaufmittel N(0,5). PLN-Streuung HalfNormal(2); NB log(shape) N(0,1.5). Wiederfindung und Volumina gelten als bekannt. Prior- und Wiederfindungssensitivitaet sind noch nicht automatisiert.")
-    settings = dict(models=selected, target=target, q=q, alpha=alpha, draws=draws, warmup=warmup, chains=chains, seed=seed, independent=independent)
+            st.caption("Feste Priors auf ln(Konzentration /100 mL): Zulaufmittel N(0,10), Zulaufstreuung HalfNormal(2); Ablaufmittel N(0,5). PLN-Streuung HalfNormal(2); NB log(shape) N(0,1.5). Wiederfindung und Volumina gelten in der Anpassung als bekannt; die Empfindlichkeit gegenueber der Wiederfindung wird unterhalb der Ergebnisse ausgewiesen. Prior-Sensitivitaet ist nicht automatisiert.")
+    settings = dict(models=selected, target=target, q=q, alpha=alpha, draws=draws, warmup=warmup,
+                    chains=chains, seed=seed, independent=independent, slope_mode=slope_mode)
     fingerprint = _fingerprint(raw_in,raw_out,settings)
     if not PYMC_AVAILABLE:
         st.error("Diese Auswertung benoetigt PyMC in einer unterstuetzten Python-Umgebung (z.B. Python 3.13).")
@@ -394,8 +488,13 @@ def _model_section(parameter, pid, raw_in, raw_out, inflow, outflow, guideline, 
             st.error("Eingaben korrigieren, mindestens ein Modell waehlen und die Unabhaengigkeitsannahme bestaetigen.")
         else:
             try:
-                arrays = model_arrays(inflow,outflow)
-                payload = {label:dict(analysis_kind="volume_counts", family=FAMILIES[label], **arrays,
+                # Conditional candidates need the pair-matched arrays; unpaired ones may
+                # use every influent value, including historical samples without a pair.
+                arrays = model_arrays(inflow,outflow) if unpaired else None
+                paired_arrays = model_arrays(inflow,outflow,paired=True) if conditional else None
+                payload = {label:dict(analysis_kind="volume_counts", family=FAMILIES[label],
+                                      **(paired_arrays if label in conditional else arrays),
+                                      **({"slope_mode":slope_mode} if label in conditional else {}),
                                       q=q,alpha=alpha,draws=draws,warmup=warmup,chains=chains,seed=seed)
                            for label in selected}
                 with st.spinner("Modelle werden angepasst und geprueft …"):
@@ -414,7 +513,12 @@ def _model_section(parameter, pid, raw_in, raw_out, inflow, outflow, guideline, 
         return
     st.divider()
     st.markdown("#### Ergebnisse: modellbasierte Konzentrations-LRV")
-    st.caption(f"q{q} der Population bei unabhaengigem Zu-/Ablauf. Untergrenze: einseitige {(1-alpha)*100:g}%-Kredibilitaetsgrenze. Experimentelle Kandidaten; keine Gleichsetzung mit der messbegrenzten Leitfaden-LRV oder einer regulatorischen Freigabe.")
+    estimands = {result.get("estimand") for result in saved["result"]["results"].values()}
+    basis = " bzw. ".join(text for key, text in
+                          [("latent_independent_population_lrv", "bei unabhaengigem Zu-/Ablauf"),
+                           ("latent_conditional_population_lrv", "bei geschaetzter Kopplung an den Zulauf")]
+                          if key in estimands) or "der Population"
+    st.caption(f"q{q} der Population {basis}. Untergrenze: einseitige {(1-alpha)*100:g}%-Kredibilitaetsgrenze. Experimentelle Kandidaten; keine Gleichsetzung mit der messbegrenzten Leitfaden-LRV oder einer regulatorischen Freigabe.")
     summary_container = st.container()
     with st.expander("So lesen Sie die Ergebnistabelle"):
         st.markdown("""
@@ -428,8 +532,23 @@ def _model_section(parameter, pid, raw_in, raw_out, inflow, outflow, guideline, 
         st.error(f"{label}: {error}")
     for label,result in saved["result"]["results"].items():
         status = "Analyse nicht belastbar / pruefen" if result["warnings"] else ("Modellkriterium erreicht" if result["L_alpha"] >= target else "Modellkriterium nicht nachgewiesen")
-        rows.append({"Modell":label,"Untere Grenze":round(result["L_alpha"],2),"Median q":round(result["median"],2),"Status":status})
+        coupling = result.get("slope")
+        if not coupling:
+            shown_b = "ungepaart"
+        elif coupling["fixed"] is not None:
+            shown_b = f"{coupling['fixed']:g} (fest)"
+        else:
+            shown_b = f"{coupling['median']:.2f} ({coupling['low']:.2f}–{coupling['high']:.2f})"
+        rows.append({"Modell":label,"Kopplung b":shown_b,"Untere Grenze":round(result["L_alpha"],2),
+                     "Median q":round(result["median"],2),"Status":status})
         with st.expander(f"{label}: Diagnostik und praediktive Pruefung",expanded=True):
+            if coupling and coupling["fixed"] is None:
+                st.metric("Kopplung b (Median)", f"{coupling['median']:.2f}", border=True,
+                          help=f"90%-Intervall {coupling['low']:.2f} bis {coupling['high']:.2f}. "
+                               "Nahe 0 verhaelt sich die Anlage wie im ungepaarten Modell, nahe 1 folgt der "
+                               "Ablauf dem Zulauf und nur (1 - b) der Zulaufstreuung erreicht die LRV.")
+            elif coupling:
+                st.caption(f"Kopplung b war fest auf {coupling['fixed']:g} gesetzt; sie wurde nicht aus den Daten geschaetzt.")
             d = result["diagnostics"]
             diag = st.columns(4)
             diag[0].metric("Max. R-hat", "—" if d["max_rhat"] is None else f"{d['max_rhat']:.3f}", border=True,
@@ -455,5 +574,8 @@ def _model_section(parameter, pid, raw_in, raw_out, inflow, outflow, guideline, 
             bounds = [r["L_alpha"] for r in saved["result"]["results"].values()]
             st.write(f"Spanne der unteren Grenzen ueber die Kandidaten: **{np.ptp(bounds):.2f} log**.")
             st.caption("Die Modellspanne ist ein Sensitivitaetsmass, kein Unsicherheitsintervall. Diagnostisch auffaellige Kandidaten zuerst pruefen.")
+        st.divider()
+        _recovery_sensitivity(outflow, saved["result"]["results"], target, alpha)
+        st.divider()
         st.download_button("Ergebnisse und Eingaben als JSON herunterladen",json.dumps(saved,ensure_ascii=False,indent=2,
             default=lambda v:v.tolist() if isinstance(v,np.ndarray) else str(v)),file_name=f"validreuse_{pid}.json",mime="application/json")

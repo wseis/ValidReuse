@@ -87,7 +87,8 @@ no default passwords are provided.
 
 The sidebar workspace **Dokumentation und Formeln** documents every quantity the app
 reports, with its formula: the three volume methods and the constraints on them,
-exposure and unit conversion, Eq. 5-1/5-2 and the paired guideline LRV, the model
+Eq. 4-1 to 4-3 with the reason the influent rather than the effluent is rescaled,
+unit conversion, Eq. 5-1/5-2 and the paired guideline LRV, the model
 likelihood and priors, the closed-form and numerical population quantiles, the
 diagnostic thresholds and the status logic, plus the legacy methods and a symbol
 table. Each section names the function that implements it, and the volume section
@@ -120,17 +121,44 @@ Volume modes, all in mL:
 - `effective`: already corrected original-water volume, used once. Other volume
   fields are ignored in this mode; document the source in `recovery_source`.
 
+The effective volume in units of 100 mL is the **reference factor** `V_eff/100`.
+Following the guide (Kap. 4.6.1, Eq. 4-1 to 4-3) it is applied to the *influent*:
+`c_in_reference = c_in_100ml * V_eff/100`, while the effluent stays the raw count —
+under Eq. 5-2 a count of zero becomes one counted unit in `V_eff`, not one per
+100 mL. Steps 2 and 3 display the factor and the raised influent, and
+`guideline_lrv_pairs` exports both as `reference_factor` and
+`inflow_concentration_reference`. The per-100-mL effluent concentration is reported
+for readability and does not enter the LRV.
+
 Recovery is a fraction in (0,1], not percent. Dilution factor 10 denotes 1:10.
+Because `V_eff` is linear in recovery, the reported LRV moves by `log10(R/R0)`: a
+tenfold error in the assumed recovery is exactly one log. Step 4 therefore plots the
+lower bound over recoveries of 1–100 % and reports the critical recovery at which the
+target is no longer met. The curve is an analytic shift of the fitted bounds, not a
+refit — exact for the guideline LRV, and within 0.05 log of real refits for the model
+candidates (about 0.08 log when every effluent count is zero). It needs one recovery
+shared by all effluent analyses.
 Technical replicates must use nonoverlapping aliquots and the same sample ID; each
 has its own exposure but shares a latent concentration. Environmental samples must
 have distinct IDs. A sample location and time should be recorded for traceability.
 
-Both PyMC candidates model `count ~ Poisson(effective_mL/100 * concentration)`.
+All PyMC candidates model `count ~ Poisson(effective_mL/100 * concentration)`.
 Poisson-lognormal uses lognormal sample concentrations; the negative-binomial
-comparator uses gamma sample concentrations. The output is the population LRV
-quantile for **independent latent influent/effluent concentrations**, with a
-one-sided posterior credible lower bound. This is distinct from the legacy
-count-predictive LRV. Exact zero counts need no pseudocount in the likelihood.
+comparator uses gamma sample concentrations. The two **unpaired** candidates are the
+default: they treat influent and effluent as independent populations, so every
+influent value — including historical samples with no matching effluent — enters the
+fit, and the full influent spread propagates into the LRV. The two **conditional**
+(covariance) candidates instead model the latent effluent given the paired influent,
+`ln C_out = a + b (ln c_in - m) + eps`, and estimate the coupling `b`. Only the
+fraction `(1 - b)` of the influent spread reaches the LRV, so `b = 0` reproduces the
+unpaired result and `b = 1` removes the influent spread entirely; `b` can also be
+pinned to either value. The conditional candidates need exactly one influent
+concentration per environmental effluent sample, matched by pair ID
+(`model_arrays(..., paired=True)`), and the reported `b` carries a 90 % interval.
+Documentation section 8 gives the equations, the simulation pseudocode and a flow
+chart of the fit. The output is the population LRV quantile with a one-sided
+posterior credible lower bound, distinct from the legacy count-predictive LRV. Exact
+zero counts need no pseudocount in the likelihood.
 The preview separately shows the guideline's count-scale zero convention.
 When matching pair IDs are supplied, the app also reports the paired,
 measurement-limited LRV from Eq. 5-2. Technical effluent replicates are pooled
