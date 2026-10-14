@@ -1,0 +1,6 @@
+﻿Eine Zeile je Analyse. Ganze Counts einschließlich 0 eintragen. volume_method wählen und nur die dafür erklärten Volumenfelder ausfüllen. Spaltennamen nicht ändern.,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,
+sample_id,replicate_id,date,location,pair_id,result_type,value,unit,volume_method,filtered_ml,eluate_ml,assayed_ml,dilution_factor,recovery,effective_ml,recovery_source,notes
+OUT-001,1,2026-01-12,Ablauf Kläranlage,P-001,count,3,count,concentrated,15000,400,100,1,0.5,,Validierungsversuch 2026-01,Beispiel: effektives Volumen = 1875 mL
+OUT-002,1,2026-01-19,Ablauf Kläranlage,P-002,count,0,count,direct,,,500,1,0.8,,Wiederfindungsversuch 2026-01,Beispiel: Nullzählung beibehalten
+OUT-003,1,2026-01-26,Ablauf Kläranlage,P-003,count,2,count,effective,,,,,,1200,"Extern berechnet, SOP-17",Beispiel: effektives Volumen direkt angegeben

@@ -1,0 +1,5 @@
+﻿"Eine Zeile je Messung. Für die Modellierung: result_type = concentration, value > 0 und eine Konzentrationseinheit angeben. Spaltennamen nicht ändern.",,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,
+sample_id,replicate_id,date,location,pair_id,result_type,value,unit,volume_method,filtered_ml,eluate_ml,assayed_ml,dilution_factor,recovery,effective_ml,recovery_source,notes
+IN-001,1,2026-01-12,Zulauf Kläranlage,P-001,concentration,2500000,/100 mL,,,,,,,,,Beispiel – durch eigene Daten ersetzen
+IN-002,1,2026-01-19,Zulauf Kläranlage,P-002,concentration,1800000,/100 mL,,,,,,,,,Beispiel – durch eigene Daten ersetzen
